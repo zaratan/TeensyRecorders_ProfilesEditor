@@ -1,0 +1,43 @@
+[project]
+name = "teensy-profiles-editor"
+version = "0.5.0"
+authors = [
+    { name = "Alexandre Langlais", email = "langlais.alexandre03@gmail.com" },
+    { name = "Denis Pasin", email = "zaratan@hey.com" },
+]
+description = "Petit utilitaire graphique pour éditer les fichiers Profiles.ini des TeensyRecorders"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "pyside6>=6.10.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/a-langlais/TeensyRecorders_ProfilesEditor"
+Issues = "https://github.com/a-langlais/TeensyRecorders_ProfilesEditor/issues"
+"Original Author" = "https://github.com/a-langlais"
+
+[project.scripts]
+teensy-profiles-editor = "app.main:run"
+dev = "app.main:run"
+
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app/"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.16.0",
+]

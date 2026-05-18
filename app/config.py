@@ -1,3 +1,11 @@
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    BUILD_VERSION = _pkg_version("teensy-profiles-editor")
+except PackageNotFoundError:
+    BUILD_VERSION = "0.0.0+unknown"
+
+
 FIELDS = {
     # ---- Profil ----
     "ProfileName": {"type": "text", "limit": 11, "tag": "Nom de profil", "helper":"Nom du profil tel qu’il apparaît dans le TeensyRecorder."},
@@ -186,5 +194,3 @@ SUBTITLES = {
 }
 
 PROFILE_LABELS = {"Profile 2": "2", "Profile 3": "3", "Profile 4": "4", "Profile 5": "5"}
-
-BUILD_VERSION = "0.4"

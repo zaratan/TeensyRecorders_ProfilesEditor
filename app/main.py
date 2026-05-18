@@ -2,14 +2,15 @@ import signal
 import sys
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-from ui_editor import ProfileEditor
-from ini_utils import resource_path
+from .ui_editor import ProfileEditor
+from .ini_utils import resource_path
 
-if __name__ == "__main__":
+
+def run():
     app = QApplication(sys.argv)
 
     signal.signal(signal.SIGINT, lambda *_: app.quit())
-    # Réveille périodiquement la boucle Qt pour laisser Python traiter SIGINT
+    # Wake the Qt loop periodically so Python can handle SIGINT
     sigint_timer = QTimer()
     sigint_timer.start(200)
     sigint_timer.timeout.connect(lambda: None)
@@ -22,3 +23,7 @@ if __name__ == "__main__":
     window.show()
 
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    run()

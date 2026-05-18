@@ -5,7 +5,6 @@ __pycache__/
 *.pyd
 *.so
 *.egg-info/
-build/
 
 # --- Virtualenv ---
 .env/
@@ -22,7 +21,18 @@ ENV/
 *.log
 *.out
 *.tmp
-*.spec
+
+# --- Build artifacts ---
+build/
+dist/
+*.zip
+*.app/
+*.iconset/
+
+# --- Signing / notarization (never commit) ---
+certificate.p12
+build.keychain*
+notarize_output.txt
 
 # --- Config générés ---
 Profiles_custom.ini

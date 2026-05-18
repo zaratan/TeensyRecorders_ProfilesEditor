@@ -4,8 +4,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEd
 from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
 from PySide6.QtCore import Qt, QLocale, QTimer, QEvent
 
-from ini_utils import load_profiles, get_value, update_value, save_profiles
-from config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES
+from .ini_utils import load_profiles, get_value, update_value, save_profiles
+from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES
 
 
 class HelperPopup(QFrame):
@@ -251,7 +251,7 @@ class ProfileEditor(QWidget):
         self.tabs.clear()
         pid = self.profile_id
 
-        from ini_utils import get_value
+        from .ini_utils import get_value
         for section_name, keys in SECTION_TITLES.items():
             group = QWidget()
             form_layout = QFormLayout()
