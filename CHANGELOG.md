@@ -2,6 +2,31 @@
 
 Toutes les modifications notables du projet sont documentées ici.
 
+## [0.6.0] - 2026-05-18
+### Ajouté
+- **Dialog « À propos »** accessible via un bouton `?` en haut à droite (logo, version, description, lien doc, crédit).
+- Curseur pointer (`Qt.PointingHandCursor`) sur tous les éléments cliquables : onglets (via une sous-classe `ClickableTabBar`), combos, boutons, icônes d'aide.
+- Indentation des champs (12px) sous chaque sous-titre de section pour mieux délimiter visuellement les groupes.
+
+### Changé
+- **Refonte UX/UI complète** :
+  - En-tête compact (titre + bouton `?`) à la place du bloc logo + description + lien qui occupait tout le haut de la fenêtre.
+  - Sous-titres de section en small-caps gris (`#9a9a9a`, `letter-spacing: 0.5px`) avec séparateur fin, à la place des `<h3>` en gras.
+  - Alignement des labels de formulaire à gauche, une seule colonne label/input cohérente.
+  - Icône d'aide `i` discrète par défaut, surlignée en bleu au survol. Zone cliquable élargie à 28×28px.
+  - `QLineEdit` paddés à `4px 8px` ; `QComboBox` natif macOS préservé (flèche système), seul le popup est restylé.
+  - Espacement vertical des formulaires passé à 10px ; largeurs d'input bornées à 140–220px.
+- Chaque onglet est désormais wrappé dans un `QScrollArea` ; le `QTabWidget` absorbe tout l'espace vertical disponible.
+- Fenêtre redimensionnable librement (largeur max non plus plafonnée à 1000px) ; minimums passés à 420×500px.
+- Dossier de sortie par défaut : `~/Documents` (résolu via `QStandardPaths.DocumentsLocation`, cross-platform).
+
+### Corrigé
+- **Version affichée dans le bundle** : `0.0.0+unknown` → version réelle. Un fichier `app/_version.py` est désormais généré par le `.spec` PyInstaller à partir de `pyproject.toml`. En dev, fallback sur `importlib.metadata`.
+- **Dossier de sortie en bundle macOS** : auparavant `/` (le `.app` est lancé depuis `/` par Finder), désormais le dossier `Documents` de l'utilisateur.
+- **Dark mode macOS** : ajout de `NSRequiresAquaSystemAppearance: False` dans l'`Info.plist` pour que le bundle hérite correctement de l'apparence système.
+
+---
+
 ## [0.5.0] - 2026-05-18
 ### Ajouté
 - **Distribution macOS** : builds `.app` signés Apple Developer ID et notarisés, en versions Apple Silicon (`arm64`) et Intel (`x86_64`). Téléchargement → double-clic, sans warning Gatekeeper.
