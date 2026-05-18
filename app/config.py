@@ -1,9 +1,14 @@
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
+# Build-time generated file (see TeensyProfilesEditor.spec) — exists in
+# packaged builds, absent in dev. Dev installs read the package metadata.
 try:
-    BUILD_VERSION = _pkg_version("teensy-profiles-editor")
-except PackageNotFoundError:
-    BUILD_VERSION = "0.0.0+unknown"
+    from ._version import __version__ as BUILD_VERSION
+except ImportError:
+    try:
+        BUILD_VERSION = _pkg_version("teensy-profiles-editor")
+    except PackageNotFoundError:
+        BUILD_VERSION = "0.0.0+unknown"
 
 
 FIELDS = {

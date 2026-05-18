@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QFormLayout, QTabWidget, QTabBar, QFrame, QToolTip, QApplication, QScrollArea, QSizePolicy, QDialog, QToolButton
 from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
-from PySide6.QtCore import Qt, QLocale, QTimer, QEvent
+from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths
 
 from .ini_utils import load_profiles, get_value, update_value, save_profiles
 from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES
@@ -203,7 +203,7 @@ class ProfileEditor(QWidget):
         self.lines = load_profiles(self.ini_path)
         self.profile_id = "2"
         self.inputs = {}
-        self.out_dir = Path(".")
+        self.out_dir = self._default_output_dir()
         self.out_name = "Profiles_custom.ini"
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
 
@@ -294,6 +294,16 @@ class ProfileEditor(QWidget):
         layout.addWidget(footer)
 
         self.setLayout(layout)
+
+    @staticmethod
+    def _default_output_dir() -> Path:
+        # Qt resolves the platform-specific Documents folder (macOS, Windows,
+        # Linux with locale awareness). Falls back to home if the user has no
+        # Documents directory configured.
+        docs = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        if docs and Path(docs).exists():
+            return Path(docs)
+        return Path.home()
 
     def show_about(self):
         dialog = AboutDialog(self.logo_path, self)

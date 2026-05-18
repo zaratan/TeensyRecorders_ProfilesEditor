@@ -28,6 +28,7 @@ dist/
 *.zip
 *.app/
 *.iconset/
+app/_version.py
 
 # --- Signing / notarization (never commit) ---
 certificate.p12

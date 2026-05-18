@@ -11,6 +11,12 @@ datas = [
 with open('pyproject.toml', 'rb') as f:
     version = tomllib.load(f)['project']['version']
 
+# Make the version available to the bundled app at runtime. The package is
+# not "installed" inside a PyInstaller bundle, so importlib.metadata cannot
+# resolve it — instead we materialise a small module the app can import.
+with open('app/_version.py', 'w') as f:
+    f.write(f'__version__ = "{version}"\n')
+
 codesign_id = os.environ.get('APPLE_SIGNING_IDENTITY', None) or None
 entitlements = 'entitlements.plist' if codesign_id else None
 
@@ -68,6 +74,7 @@ if platform.system() == 'Darwin':
             'CFBundleVersion': version,
             'CFBundleShortVersionString': version,
             'NSHighResolutionCapable': True,
+            'NSRequiresAquaSystemAppearance': False,
             'LSMinimumSystemVersion': '11.0',
         },
         codesign_identity=codesign_id,
