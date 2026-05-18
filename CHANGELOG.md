@@ -2,6 +2,26 @@
 
 Toutes les modifications notables du projet sont documentées ici.
 
+## [0.5.0] - 2026-05-18
+### Ajouté
+- **Distribution macOS** : builds `.app` signés Apple Developer ID et notarisés, en versions Apple Silicon (`arm64`) et Intel (`x86_64`). Téléchargement → double-clic, sans warning Gatekeeper.
+- **CI GitHub Actions** : workflow `release.yml` qui produit et publie automatiquement les binaires Windows + macOS sur la page Releases à chaque tag `v*`.
+- `pyproject.toml` (gestion via [uv](https://docs.astral.sh/uv/)), `TeensyProfilesEditor.spec` (PyInstaller cross-platform), `entitlements.plist`, `launcher.py`.
+
+### Changé
+- Migration `pip + requirements.txt` → `uv + pyproject.toml`.
+- `app/` est maintenant un vrai package Python (ajout de `__init__.py`, imports relatifs). Plus besoin de `PYTHONPATH=app`.
+- Lancement en dev : `uv run dev` (au lieu de `PYTHONPATH=app python app/main.py`).
+- Version de l'app lue dynamiquement depuis `pyproject.toml` via `importlib.metadata` (plus de constante hardcodée dans `config.py`).
+- Le binaire Windows n'est plus commité dans `dist/` : il est produit par la CI et publié sur GitHub Releases.
+
+### Supprimé
+- `compiler/compiler.py` (remplacé par `TeensyProfilesEditor.spec`).
+- `requirements.txt` (remplacé par `pyproject.toml`).
+- `dist/TeensyProfilesEditor.exe` retiré du tracking git (toujours dans l'historique).
+
+---
+
 ## [0.4] - 2026-01-22
 ### Ajouté
 - Prise en charge complète des nouveaux paramètres introduits dans la version 1.03 :

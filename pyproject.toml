@@ -19,8 +19,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/a-langlais/TeensyRecorders_ProfilesEditor"
-Issues = "https://github.com/a-langlais/TeensyRecorders_ProfilesEditor/issues"
+Homepage = "https://github.com/zaratan/TeensyRecorders_ProfilesEditor"
+Issues = "https://github.com/zaratan/TeensyRecorders_ProfilesEditor/issues"
+"Upstream" = "https://github.com/a-langlais/TeensyRecorders_ProfilesEditor"
 "Original Author" = "https://github.com/a-langlais"
 
 [project.scripts]
