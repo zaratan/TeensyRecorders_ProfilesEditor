@@ -19,7 +19,7 @@ def run():
     logo_file = resource_path("img/logo_PR.png")
 
     window = ProfileEditor(str(ini_file), logo_path=str(logo_file))
-    window.resize(500, 820)
+    window.resize(500, 900)
     window.show()
 
     sys.exit(app.exec())
