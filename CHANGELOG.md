@@ -2,6 +2,12 @@
 
 Toutes les modifications notables du projet sont documentées ici.
 
+## [0.6.1] - 2026-05-19
+### Changé
+- **Nom du bundle macOS** : `TeensyProfilesEditor.app` → `TeensyRecorders Profiles Editor.app`. Le nom complet (avec espaces) est désormais affiché par Finder et Spotlight, sans avoir besoin de l'override `CFBundleDisplayName`. Le workflow `release.yml` a été mis à jour en conséquence ; le nom des artefacts zip et du `.exe` Windows reste inchangé.
+
+---
+
 ## [0.6.0] - 2026-05-18
 ### Ajouté
 - **Dialog « À propos »** accessible via un bouton `?` en haut à droite (logo, version, description, lien doc, crédit).

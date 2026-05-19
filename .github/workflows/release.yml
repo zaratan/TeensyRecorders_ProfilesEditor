@@ -68,7 +68,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          ditto -c -k --keepParent "dist/TeensyProfilesEditor.app" notarize.zip
+          ditto -c -k --keepParent "dist/TeensyRecorders Profiles Editor.app" notarize.zip
           xcrun notarytool submit notarize.zip \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
@@ -84,11 +84,11 @@ jobs:
             fi
             exit 1
           fi
-          xcrun stapler staple "dist/TeensyProfilesEditor.app"
+          xcrun stapler staple "dist/TeensyRecorders Profiles Editor.app"
           rm -f notarize.zip notarize_output.txt
 
       - name: Package signed app for distribution
-        run: ditto -c -k --keepParent "dist/TeensyProfilesEditor.app" "TeensyProfilesEditor-${{ matrix.arch }}.zip"
+        run: ditto -c -k --keepParent "dist/TeensyRecorders Profiles Editor.app" "TeensyProfilesEditor-${{ matrix.arch }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

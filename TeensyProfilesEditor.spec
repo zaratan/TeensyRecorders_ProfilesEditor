@@ -65,7 +65,7 @@ if platform.system() == 'Darwin':
     )
     app = BUNDLE(
         coll,
-        name='TeensyProfilesEditor.app',
+        name='TeensyRecorders Profiles Editor.app',
         icon='img/logo_PR.icns',
         bundle_identifier='com.zaratan.teensyprofileseditor',
         info_plist={

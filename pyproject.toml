@@ -1,6 +1,6 @@
 [project]
 name = "teensy-profiles-editor"
-version = "0.6.0"
+version = "0.6.1"
 authors = [
     { name = "Alexandre Langlais", email = "langlais.alexandre03@gmail.com" },
     { name = "Denis Pasin", email = "zaratan@hey.com" },
