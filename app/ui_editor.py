@@ -318,7 +318,10 @@ class ProfileEditor(QWidget):
             if isinstance(widget, QLineEdit):
                 self.cache[pid][key] = widget.text().strip()
             elif isinstance(widget, QComboBox):
-                self.cache[pid][key] = widget.currentText()
+                # Prefer userData (raw INI value); fall back to display text for
+                # widgets created without choice_labels (legacy combos).
+                data = widget.currentData()
+                self.cache[pid][key] = data if data is not None else widget.currentText()
 
     def update_cache(self, key, value):
         self.cache[self.profile_id][key] = str(value).strip()
@@ -435,10 +438,19 @@ class ProfileEditor(QWidget):
 
                 elif meta["type"] == "combo":
                     widget = QComboBox()
-                    widget.addItems(meta["choices"])
                     widget.setCursor(Qt.PointingHandCursor)
-                    widget.setCurrentText(val if val in meta["choices"] else meta.get("default", meta["choices"][0]))
-                    widget.currentTextChanged.connect(lambda v, k=key: self.update_cache(k, v))
+                    # choice_labels lets us show "Non/Oui" / "Relatif/Absolu" / "kHz" /
+                    # "dB" in the UI while still saving the raw INI value (choices[i]).
+                    # The userData carries the INI value; the display text is the label.
+                    choices = meta["choices"]
+                    labels = meta.get("choice_labels", choices)
+                    for choice_val, label in zip(choices, labels):
+                        widget.addItem(label, choice_val)
+                    current = val if val in choices else meta.get("default", choices[0])
+                    widget.setCurrentIndex(choices.index(current))
+                    widget.currentIndexChanged.connect(
+                        lambda i, k=key, c=choices: self.update_cache(k, c[i])
+                    )
 
                 elif meta["type"] == "int":
                     widget = QLineEdit(val)

@@ -4,6 +4,10 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+### Ajouté
+- **6 paramètres valides** précédemment absents de l'UI alors que le firmware les lit/écrit : `MasterSlave` (rôle dans un cluster PRS-S), `TopAudioFreq` / `TopDuration` / `TopPeriod` (top synchro pour PRS-S Maître), `AffRLPerm` (verrou d'affichage RhinoLogger), `BatcorderMode` (nommage compatible Batcorder ecoObs — paramètre auparavant commenté dans `config.py`).
+- **Libellés combos lisibles** : nouveau champ optionnel `choice_labels` dans `FIELDS` qui découple la valeur INI du libellé affiché. Appliqué à 14 combos `0/1` (présentés en **Non/Oui**), `ThresholdType` (**Relatif/Absolu**), `HeterodyneMode` (**Manuel/Auto**), `StereoMode` (**Stéréo/Mono droit/Mono gauche**), `LEDSynchro` (libellés FR explicites), suffixe « kHz » sur `SampFreqU`/`SampFreqA`, suffixe « dB » sur `NumericGain`, « éch. » sur `TopDuration`. La valeur écrite dans le `.ini` reste rigoureusement la même.
+
 ### Corrigé
 - **Unités des durées d'événement** : `MinDuration` et `MaxDuration` étaient étiquetés en millisecondes alors que le firmware les lit en secondes (`DecodeInt` 1-99 s / 1-999 s). Saisir « 30 ms » pour une durée d'enregistrement produisait en réalité 30 s côté appareil.
 - **Type du champ `PowerBank`** : exposé comme entier 0–255 (défaut 255), alors que le firmware utilise `DecodeBool` (strict 0/1). Toute autre valeur — y compris 255 — était silencieusement réinterprétée comme 0. Désormais combo `0`/`1`, défaut `0` (recommandation `ManuelTR.pdf §8.32`).
