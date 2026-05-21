@@ -4,7 +4,14 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEd
 from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
 from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths
 
-from .ini_utils import load_profiles, get_value, update_value, save_profiles
+from .ini_utils import (
+    detect_dropped_keys,
+    detect_missing_keys,
+    load_lines,
+    load_template_lines,
+    parse_ini,
+    save_with_template,
+)
 from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES
 
 
@@ -199,13 +206,25 @@ class ProfileEditor(QWidget):
             }
         """)
 
+        # Template is loaded once (embedded resource, never reloaded at runtime);
+        # the user file is loaded eagerly here and can be swapped via "Ouvrir".
+        self.template_lines = load_template_lines()
+        self.template_parsed = parse_ini(self.template_lines)
         self.ini_path = Path(ini_path)
-        self.lines = load_profiles(self.ini_path)
+        self.lines: list[str] = []
+        self.user_parsed: dict[str, dict[str, str]] = {}
+        self.missing_keys: list[tuple[str, str]] = []
+        self.dropped_keys: list[tuple[str, str]] = []
         self.profile_id = "2"
         self.inputs = {}
         self.out_dir = self._default_output_dir()
         self.out_name = "Profiles_custom.ini"
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
+        self.drift_banner: QFrame | None = None
+        # Parse the user file once at load. user_parsed is the authoritative
+        # snapshot of disk values; widget edits land in self.cache and override
+        # user_parsed at save time.
+        self._parse_user_file()
 
         layout = QVBoxLayout()
 
@@ -240,6 +259,19 @@ class ProfileEditor(QWidget):
         header_layout.addWidget(about_btn)
         layout.addLayout(header_layout)
 
+        # Source file row: "Ouvrir un fichier..." + path label
+        source_layout = QHBoxLayout()
+        open_btn = QPushButton("Ouvrir un fichier…")
+        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.setToolTip("Charger un fichier Profiles.ini existant")
+        open_btn.clicked.connect(self.open_ini_file)
+        source_layout.addWidget(open_btn)
+        self.source_path_label = QLabel(str(self.ini_path.resolve()))
+        self.source_path_label.setStyleSheet("color: gray;")
+        self.source_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        source_layout.addWidget(self.source_path_label, stretch=1)
+        layout.addLayout(source_layout)
+
         # Sélecteur de profil
         profile_layout = QHBoxLayout()
         profile_layout.addWidget(QLabel("Sélection du profil :"))
@@ -249,6 +281,14 @@ class ProfileEditor(QWidget):
         self.profile_combo.currentTextChanged.connect(self.change_profile)
         profile_layout.addWidget(self.profile_combo)
         layout.addLayout(profile_layout)
+
+        # Schema-drift banner slot: an empty layout that hosts the (re)built
+        # banner. Keeping it as a dedicated slot lets us swap the banner on
+        # every file reload without messing with insertion indices.
+        self.drift_banner_slot = QVBoxLayout()
+        self.drift_banner_slot.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self.drift_banner_slot)
+        self._refresh_drift_banner()
 
         # Onglets
         self.tabs = QTabWidget()
@@ -294,6 +334,115 @@ class ProfileEditor(QWidget):
         layout.addWidget(footer)
 
         self.setLayout(layout)
+
+    def _parse_user_file(self) -> None:
+        """Re-read self.ini_path from disk and refresh drift detection."""
+        self.lines = load_lines(self.ini_path)
+        self.user_parsed = parse_ini(self.lines)
+        self.missing_keys = detect_missing_keys(self.user_parsed, self.template_parsed)
+        self.dropped_keys = detect_dropped_keys(self.user_parsed, self.template_parsed)
+
+    def open_ini_file(self) -> None:
+        """User-triggered: load a different Profiles.ini, reset cache, rebuild form."""
+        # Default to the save folder — users typically re-open a file they just
+        # saved, so this avoids a needless folder hop. Falls back to home if
+        # the save folder doesn't exist yet.
+        start_dir = self.out_dir if self.out_dir.exists() else Path.home()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Ouvrir un fichier Profiles.ini",
+            str(start_dir),
+            "Fichiers INI (*.ini);;Tous les fichiers (*)",
+        )
+        if not path:
+            return
+        self.ini_path = Path(path)
+        self._parse_user_file()
+        # New file = fresh starting point: discard pending edits.
+        self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
+        self.source_path_label.setText(str(self.ini_path.resolve()))
+        self._refresh_drift_banner()
+        self.build_form()
+
+    def _refresh_drift_banner(self) -> None:
+        """Tear down the previous banner (if any) and rebuild it from the
+        current missing/dropped state. Hides itself when there's nothing to
+        report.
+        """
+        if self.drift_banner is not None:
+            self.drift_banner_slot.removeWidget(self.drift_banner)
+            self.drift_banner.deleteLater()
+            self.drift_banner = None
+
+        if not self.missing_keys and not self.dropped_keys:
+            return
+
+        n_missing = len(self.missing_keys)
+        n_dropped = len(self.dropped_keys)
+        parts: list[str] = []
+        if n_missing:
+            parts.append(
+                f"{n_missing} paramètre{'s' if n_missing > 1 else ''} "
+                f"initialisé{'s' if n_missing > 1 else ''} aux valeurs par défaut firmware"
+            )
+        if n_dropped:
+            parts.append(
+                f"{n_dropped} paramètre{'s' if n_dropped > 1 else ''} obsolète"
+                f"{'s' if n_dropped > 1 else ''} retiré{'s' if n_dropped > 1 else ''} à la sauvegarde"
+            )
+        summary = " — ".join(parts) + "."
+
+        banner = QFrame()
+        banner.setStyleSheet(
+            "QFrame { background-color: #2b4d7a; border-radius: 4px; }"
+            "QLabel { color: white; }"
+        )
+        bl = QHBoxLayout(banner)
+        bl.setContentsMargins(10, 6, 6, 6)
+        bl.setSpacing(8)
+
+        msg = QLabel(summary)
+        msg.setWordWrap(True)
+        bl.addWidget(msg, stretch=1)
+
+        details_btn = QPushButton("Voir détails")
+        details_btn.setCursor(Qt.PointingHandCursor)
+        details_btn.setStyleSheet(
+            "QPushButton { color: white; background: transparent; "
+            "border: 1px solid #6e8fb5; border-radius: 3px; padding: 2px 8px; }"
+            "QPushButton:hover { background-color: #3a6094; }"
+        )
+        details_btn.clicked.connect(self._show_drift_details)
+        bl.addWidget(details_btn)
+
+        dismiss_btn = QToolButton()
+        dismiss_btn.setText("✕")
+        dismiss_btn.setCursor(Qt.PointingHandCursor)
+        dismiss_btn.setStyleSheet(
+            "QToolButton { color: white; background: transparent; border: none; "
+            "font-weight: bold; padding: 2px 6px; }"
+            "QToolButton:hover { color: #ffd; }"
+        )
+        dismiss_btn.clicked.connect(banner.hide)
+        bl.addWidget(dismiss_btn)
+
+        self.drift_banner_slot.addWidget(banner)
+        self.drift_banner = banner
+
+    def _show_drift_details(self) -> None:
+        lines: list[str] = []
+        if self.missing_keys:
+            lines.append("Initialisés aux valeurs par défaut firmware :")
+            for section, key in self.missing_keys:
+                lines.append(f"  • [{section}] {key}")
+            lines.append("")
+        if self.dropped_keys:
+            lines.append("Inconnus du firmware actuel, retirés à la sauvegarde :")
+            for section, key in self.dropped_keys:
+                lines.append(f"  • [{section}] {key}")
+        QMessageBox.information(
+            self, "Différences avec le schéma firmware", "\n".join(lines)
+        )
 
     @staticmethod
     def _default_output_dir() -> Path:
@@ -398,8 +547,8 @@ class ProfileEditor(QWidget):
         self.inputs.clear()
         self.tabs.clear()
         pid = self.profile_id
+        section = f"Profile_{pid}"
 
-        from .ini_utils import get_value
         for section_name, keys in SECTION_TITLES.items():
             group = QWidget()
             form_layout = QFormLayout()
@@ -425,7 +574,8 @@ class ProfileEditor(QWidget):
 
                 meta = FIELDS[key]
                 val = self.cache[pid].get(
-                    key, get_value(self.lines, f"Profile_{pid}", key, str(meta.get("default", "")))
+                    key,
+                    self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))),
                 )
 
                 if meta["type"] == "text":
@@ -499,63 +649,109 @@ class ProfileEditor(QWidget):
             self.out_dir = Path(dir_)
             self.out_dir_label.setText(str(self.out_dir.resolve()))
 
+    def _validate_and_normalize(self, key: str, raw: str) -> str | None:
+        """Validate a single value against its FIELDS spec; return the
+        canonical INI-form string, or None if the value is invalid (a
+        QMessageBox has already been shown to the user).
+        """
+        meta = FIELDS[key]
+        val = raw
+        if meta["type"] == "text":
+            if key in ("ProfileName", "WavPrefix"):
+                limit = meta.get("limit")
+                if limit and len(val) > limit:
+                    QMessageBox.warning(self, "Erreur", f"{key} limité à {limit} caractères")
+                    return None
+                if re.search(r"[^A-Za-z0-9 _-]", val):
+                    QMessageBox.warning(self, "Erreur", f"{key} contient des caractères interdits")
+                    return None
+            elif key in ("StartTime", "EndTime"):
+                if val and not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", val):
+                    QMessageBox.warning(self, "Erreur", f"{key} doit être au format HH:MM (ex: 08:30)")
+                    return None
+            elif key in ("StartDate", "EndDate"):
+                # Accept "--/--" (no limit) or "JJ/MM" (firmware tolerates 31/02
+                # so we keep validation lenient on the day/month combo itself).
+                if val and val != "--/--" and not re.match(
+                    r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val
+                ):
+                    QMessageBox.warning(self, "Erreur", f"{key} doit être au format JJ/MM ou --/--")
+                    return None
+            return val
+
+        if meta["type"] == "int":
+            try:
+                val_int = int(val)
+            except (ValueError, TypeError):
+                val_int = meta.get("default", meta["min"])
+            if not (meta["min"] <= val_int <= meta["max"]):
+                QMessageBox.warning(
+                    self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}"
+                )
+                return None
+            return str(val_int)
+
+        if meta["type"] == "float":
+            normalized = (val or "").strip().replace(",", ".")  # accept comma input
+            try:
+                val_f = float(normalized)
+            except (ValueError, TypeError):
+                val_f = meta.get("default", meta["min"])
+            if not (meta["min"] <= val_f <= meta["max"]):
+                QMessageBox.warning(
+                    self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}"
+                )
+                return None
+            step = meta.get("step")
+            if step:
+                decimals = 6 if key in ("Latitude", "Longitude") else 3
+                val_f = round(round((val_f - meta["min"]) / step) * step + meta["min"], decimals)
+            return str(val_f)
+
+        # combo: stored as-is (the choice value was already extracted via userData)
+        return val
+
+    def _collect_overrides(self) -> dict[str, dict[str, str]]:
+        """Build the {section: {key: value}} overrides dict from the user file
+        plus the current UI cache. The cache takes precedence over disk values,
+        so unedited fields keep their on-disk value (or template default if
+        absent from disk).
+        """
+        overrides: dict[str, dict[str, str]] = {}
+        # [Common] passed through unchanged (the app doesn't edit it).
+        if "Common" in self.user_parsed:
+            overrides["Common"] = dict(self.user_parsed["Common"])
+        # Profile_1 is read-only firmware-side ("always Beginner"); preserve as-is.
+        if "Profile_1" in self.user_parsed:
+            overrides["Profile_1"] = dict(self.user_parsed["Profile_1"])
+        # Profile_2..5: layer cache on top of disk values.
+        for pid in PROFILE_LABELS.values():
+            section = f"Profile_{pid}"
+            merged = dict(self.user_parsed.get(section, {}))
+            merged.update(self.cache.get(pid, {}))
+            overrides[section] = merged
+        return overrides
+
     def save_profile(self):
         self.sync_widgets_to_cache()
-        section = f"Profile_{self.profile_id}"
         pid = self.profile_id
+        section = f"Profile_{pid}"
 
+        # Validate every editable value for the currently-shown profile.
+        # (Other profiles' cached values are written through unchanged for now;
+        # multi-profile validation is in scope for the conditional-visibility
+        # phase.)
         for key, meta in FIELDS.items():
-            val = self.cache[pid].get(key, get_value(self.lines, section, key, str(meta.get("default", ""))))
+            raw = self.cache[pid].get(key, self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))))
+            normalized = self._validate_and_normalize(key, raw)
+            if normalized is None:
+                return
+            self.cache[pid][key] = normalized
 
-            if meta["type"] == "text":
-                if key in ["ProfileName", "WavPrefix"]:
-                    limit = meta.get("limit")
-                    if limit and len(val) > limit:
-                        QMessageBox.warning(self, "Erreur", f"{key} limité à {limit} caractères")
-                        return
-                    if re.search(r"[^A-Za-z0-9 _-]", val):
-                        QMessageBox.warning(self, "Erreur", f"{key} contient des caractères interdits")
-                        return
-                elif key in ["StartTime", "EndTime"]:
-                    if val and not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", val):
-                        QMessageBox.warning(self, "Erreur", f"{key} doit être au format HH:MM (ex: 08:30)")
-                        return
-                elif key in ["StartDate", "EndDate"]:
-                    # Accept "--/--" (no limit) or "JJ/MM" (day/month, no year — firmware
-                    # tolerates impossible combos like 31/02 too, so we don't over-validate).
-                    if val and val != "--/--" and not re.match(r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val):
-                        QMessageBox.warning(self, "Erreur", f"{key} doit être au format JJ/MM ou --/--")
-                        return
-
-            elif meta["type"] == "int":
-                try:
-                    val_int = int(val)
-                except ValueError:
-                    val_int = meta.get("default", meta["min"])
-                if not (meta["min"] <= val_int <= meta["max"]):
-                    QMessageBox.warning(self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}")
-                    return
-                val = str(val_int)
-
-            elif meta["type"] == "float":
-                val = (val or "").strip().replace(",", ".") # On accepte les virgules dans la saisie
-                try:
-                    val_f = float(val)
-                except ValueError:
-                    val_f = meta.get("default", meta["min"])
-                if not (meta["min"] <= val_f <= meta["max"]):
-                    QMessageBox.warning(self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}")
-                    return
-                # arrondi si step défini
-                step = meta.get("step")
-                if step:
-                    decimals = 6 if key in ("Latitude","Longitude") else 3
-                    val_f = round(round((val_f - meta["min"]) / step) * step + meta["min"], decimals)
-                val = str(val_f)
-
-            self.lines = update_value(self.lines, section, key, val)
-
+        # Render the output file from the canonical template, injecting the
+        # validated values. This guarantees the output is always complete and
+        # firmware-aligned, regardless of what was missing in the input.
         self.out_name = self.out_name_edit.text().strip() or "Profiles_custom.ini"
         out_path = self.out_dir / self.out_name
-        save_profiles(self.lines, out_path)
+        save_with_template(self._collect_overrides(), out_path)
         QMessageBox.information(self, "Succès", f"Profil sauvegardé dans {out_path}")
