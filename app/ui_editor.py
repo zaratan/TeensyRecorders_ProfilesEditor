@@ -35,7 +35,11 @@ class HelperPopup(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         text = QLabel(helper, self)
         text.setWordWrap(True)
-        text.setMaximumWidth(280)
+        # Wider popup (360 vs 280) so 50-90 word helpers don't wrap into 8+
+        # narrow lines. Rich text is explicit so <b>…</b> and <br> behave
+        # consistently across platforms.
+        text.setMaximumWidth(360)
+        text.setTextFormat(Qt.RichText)
         layout.addWidget(text)
         self.adjustSize()
         self.move(source.mapToGlobal(source.rect().bottomLeft()))
@@ -65,7 +69,10 @@ class HelperLabel(QLabel):
     def __init__(self, helper: str, parent=None):
         super().__init__("i", parent)
         self._helper = helper
-        self.setToolTip(helper)
+        # Deliberately NOT calling setToolTip(): the native Qt tooltip renders
+        # our rich-text helper as plain text (visible <b> tags, no list breaks),
+        # which duplicates the click popup with worse formatting. The popup is
+        # the only documented path to the helper text.
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover, True)
         self.setMouseTracking(True)
@@ -878,7 +885,7 @@ class ProfileEditor(QWidget):
         if enabled.get("MinFreqUS") and enabled.get("MaxFreqUS"):
             lo, hi = as_int("MinFreqUS"), as_int("MaxFreqUS")
             if lo is not None and hi is not None and lo >= hi:
-                errors.append(("MaxFreqUS", "doit être supérieure à la Fréquence US min"))
+                errors.append(("MaxFreqUS", "doit être supérieure à la Fréquence ultrason min"))
 
         if enabled.get("MinFreqA") and enabled.get("MaxFreqA"):
             lo, hi = as_int("MinFreqA"), as_int("MaxFreqA")
