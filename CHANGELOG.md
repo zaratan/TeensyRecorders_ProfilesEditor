@@ -4,7 +4,12 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+---
+
+## [0.7.0] - 2026-05-21
+
 ### Ajouté
+- **Co-auteur Zaratan** dans le footer et la fenêtre « À propos ». Le projet est désormais signé « © Alexandre LANGLAIS & Zaratan — 2026 ».
 - **Sélecteur « Type d'appareil »** (PR / AR / PRS / PRS-S) à côté du sélecteur de profil. Préférence **persistée entre sessions** via `QSettings` (donc indépendante du fichier ouvert). En PR, les champs AR et PRS sont grisés ; en AR, les PRS le sont ; en PRS / PRS-S, les AR le sont. Combiné avec les règles OpMode / SampFreqU / ThresholdType : un champ est grisé dès qu'**au moins une** règle l'inhibe.
 - **Modes invalides du combo OpMode désactivés** selon le matériel sélectionné, miroir du firmware (`CModeGeneric.cpp:873`, `CModeParams.cpp:1071+`) : `Heterodyne` / `Audio Rec.` sont AR-only, `Synchro` est PRS-S-only. Si l'OpMode courant devient invalide après changement du type d'appareil, l'app rebascule automatiquement sur `Auto record` (comme le firmware le ferait à froid).
 - **Badges de scope colorés** à côté du label de chaque champ spécifique à un matériel ou un mode : chip <span style="color:#1d8a8a">**AR**</span> (Active Recorder, 10 champs Hétérodyne), <span style="color:#c08019">**PRS**</span> (Passive Recorder Stéréo, 6 champs Stéréo/Synchro/Top), <span style="color:#7b3aa8">**RL**</span> (RhinoLogger, 1 champ). Tooltip natif sur le badge précise le scope.

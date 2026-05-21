@@ -159,7 +159,7 @@ class AboutDialog(QDialog):
         link.setAlignment(Qt.AlignCenter)
         layout.addWidget(link)
 
-        credit = QLabel("© Alexandre LANGLAIS — 2026")
+        credit = QLabel("© Alexandre LANGLAIS & Zaratan — 2026")
         credit.setStyleSheet("color: #8a8a8a; font-size: 11px;")
         credit.setAlignment(Qt.AlignCenter)
         layout.addWidget(credit)
@@ -370,7 +370,7 @@ class ProfileEditor(QWidget):
         separator.setFrameShadow(QFrame.Sunken)
 
         layout.addWidget(separator)
-        footer = QLabel(f"© Alexandre LANGLAIS - 2026 - v{BUILD_VERSION}")
+        footer = QLabel(f"© Alexandre LANGLAIS & Zaratan - 2026 - v{BUILD_VERSION}")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #a0a0a0; font-size: 10px;")
         layout.addWidget(footer)
