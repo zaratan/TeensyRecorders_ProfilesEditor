@@ -772,6 +772,26 @@ class ProfileEditor(QWidget):
             any_active = any(enabled.get(k, True) for k in fields) if fields else True
             subtitle_widget.setEnabled(any_active)
 
+        # Tab activation: disable the click and dim the label when no field
+        # in that tab is active for the current mode. setTabEnabled handles
+        # both behaviours (greyed text + uncliquable). If the currently-shown
+        # tab is the one that just got disabled, switch to the first active
+        # one so the user isn't stranded on a blank-looking view.
+        tab_active = {i: False for i in range(self.tabs.count())}
+        for key, is_on in enabled.items():
+            tab_idx = self.field_tab_index.get(key)
+            if tab_idx is None:
+                continue
+            if is_on:
+                tab_active[tab_idx] = True
+        for tab_idx, has_active in tab_active.items():
+            self.tabs.setTabEnabled(tab_idx, has_active)
+        if not self.tabs.isTabEnabled(self.tabs.currentIndex()):
+            for i in range(self.tabs.count()):
+                if self.tabs.isTabEnabled(i):
+                    self.tabs.setCurrentIndex(i)
+                    break
+
     def change_profile(self, label):
         self.sync_widgets_to_cache()
         self.profile_id = PROFILE_LABELS[label]
