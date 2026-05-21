@@ -148,8 +148,16 @@ FIELDS = {
         "helper": "<b>PRS-S Maître uniquement.</b> <b>0</b> = top envoyé une seule fois au début de l'enregistrement. <b>≥ 1</b> = tops émis périodiquement pendant l'enregistrement."},
 
     # ---- Hétérodyne ----
-    "HeterodyneMode": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Manuel", "Auto"], "default": "0", "tag": "Mode hétérodyne", "scope": "AR",
-        "helper": "<b>Active Recorder uniquement.</b><br><br><b>Manuel</b> : c'est vous qui tournez la molette pour chercher la fréquence d'une espèce. <b>Auto</b> : l'appareil cale automatiquement la fréquence sur le pic d'énergie détecté ; la molette permet de jouer à ±10 kHz autour."},
+    # Firmware accepts 0..3 (HAM_MAX=4 in Const.h:719): Manual / Auto /
+    # AlwaysManu / AlwaysAuto. Exposing 0/1 only silently mutated profiles
+    # carrying 2 or 3 to "Manual" at save time.
+    "HeterodyneMode": {"type": "combo", "choices": ["0","1","2","3"],
+        "choice_labels": ["Manuel", "Auto", "Toujours manuel", "Toujours auto"],
+        "default": "0", "tag": "Mode hétérodyne", "scope": "AR",
+        "helper": "<b>Active Recorder uniquement.</b><br><br>"
+                  "• <b>Manuel</b> : c'est vous qui tournez la molette pour chercher la fréquence d'une espèce.<br>"
+                  "• <b>Auto</b> : l'appareil cale automatiquement la fréquence sur le pic d'énergie détecté ; la molette permet de jouer à ±10 kHz autour.<br>"
+                  "• <b>Toujours manuel</b> / <b>Toujours auto</b> : verrouille le mode et empêche la bascule manuelle depuis le menu de l'appareil."},
     "AutoRecHeter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Auto-enregistrement hétérodyne", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Déclenche automatiquement un enregistrement WAV depuis le mode hétérodyne quand un signal est détecté."},
     "RefreshGraphe": {"type": "float", "min": 0.2, "max": 2.0, "step": 0.2, "default": 1.0, "tag": "Rafraîchissement graphique (s)", "scope": "AR",
@@ -163,8 +171,15 @@ FIELDS = {
     # Firmware writes "HeterSelectiveFilter" but reads "Pre-HeterSelectiveFilter"
     # (firmware bug in CModeGeneric.cpp line 2464). We align on the read-side name
     # so the value actually round-trips through the device.
-    "Pre-HeterSelectiveFilter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Filtre sélectif hétérodyne", "scope": "AR",
-        "helper": "<b>AR, Teensy 4.1 uniquement.</b> Active un filtrage sélectif du signal hétérodyne pour améliorer la lisibilité dans un environnement bruyant. À tester sur le terrain."},
+    # Firmware accepts 0..3 (HSF_MAX=4 in Const.h:740): NoSel / Selective /
+    # AlwaysNoSel / AlwaysSel. Same silent-mutation bug as HeterodyneMode if
+    # exposed as 0/1 only.
+    "Pre-HeterSelectiveFilter": {"type": "combo", "choices": ["0","1","2","3"],
+        "choice_labels": ["Non", "Oui", "Toujours non", "Toujours oui"],
+        "default": "0", "tag": "Filtre sélectif hétérodyne", "scope": "AR",
+        "helper": "<b>AR, Teensy 4.1 uniquement.</b> Active un filtrage sélectif du signal hétérodyne pour améliorer la lisibilité dans un environnement bruyant. À tester sur le terrain.<br><br>"
+                  "• <b>Non</b> / <b>Oui</b> : choix initial, ajustable depuis le menu de l'appareil.<br>"
+                  "• <b>Toujours non</b> / <b>Toujours oui</b> : verrouille le mode."},
     "HeterAutoPlay": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Lecture automatique", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Après chaque enregistrement déclenché, rejoue automatiquement la séquence en X10 sur le casque. Pratique en prospection active pour valider à l'oreille."},
     "HeterWithGraph": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "1", "tag": "Affichage graphique", "scope": "AR",

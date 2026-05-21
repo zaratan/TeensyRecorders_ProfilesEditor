@@ -15,6 +15,42 @@ from .ini_utils import (
 from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES, SCOPE_BADGES
 
 
+def _theme_colors() -> dict[str, str]:
+    """Return the gray-scale tokens used across the UI, adapted to the current
+    system color scheme. Hex values were calibrated for WCAG AA (≥ 4.5:1 on
+    text, ≥ 3:1 on UI borders) against the respective backgrounds.
+
+    The previous version used hex values tuned for dark mode only; in light
+    mode they fell to ~2.6:1 on white — illegible for the path label, footer,
+    section subtitles, and the helper "i" icon.
+    """
+    app = QApplication.instance()
+    is_dark = False
+    if app is not None:
+        # styleHints().colorScheme() is Qt 6.5+. The Qt 6 prebuilt wheels we
+        # ship already satisfy that, but guard anyway so a older Qt at dev
+        # time falls through to the dark defaults rather than crashing.
+        try:
+            is_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        except AttributeError:
+            is_dark = True
+    if is_dark:
+        # Slightly lifted from the prior hex (#a0a0a0, #9a9a9a, …) so each
+        # gray clears AA on the dark window background (#1e1e1e ish).
+        return {
+            "secondary_text": "#b0b0b0",  # path label, output dir, footer
+            "subtitle":       "#a8a8a8",  # section small-caps
+            "tertiary_text":  "#9a9a9a",  # ? button text, helper "i" text
+            "border":         "#7a7a7a",  # ? button border, helper "i" border
+        }
+    return {
+        "secondary_text": "#666666",  # 5.7:1 on white
+        "subtitle":       "#6a6a6a",  # 5.5:1
+        "tertiary_text":  "#6c6c6c",  # 5.4:1
+        "border":         "#9a9a9a",  # 3:1 — UI-component AA
+    }
+
+
 class HelperPopup(QFrame):
     def __init__(self, helper: str, source: "HelperLabel"):
         super().__init__(None, Qt.ToolTip)
@@ -120,6 +156,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("À propos")
         self.setModal(True)
+        theme = _theme_colors()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -138,7 +175,7 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
 
         version = QLabel(f"Version {BUILD_VERSION}")
-        version.setStyleSheet("color: #8a8a8a;")
+        version.setStyleSheet(f"color: {theme['tertiary_text']};")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
 
@@ -160,7 +197,7 @@ class AboutDialog(QDialog):
         layout.addWidget(link)
 
         credit = QLabel("© Alexandre LANGLAIS & Zaratan — 2026")
-        credit.setStyleSheet("color: #8a8a8a; font-size: 11px;")
+        credit.setStyleSheet(f"color: {theme['tertiary_text']}; font-size: 11px;")
         credit.setAlignment(Qt.AlignCenter)
         layout.addWidget(credit)
 
@@ -177,41 +214,44 @@ class ProfileEditor(QWidget):
         self.setWindowTitle("TeensyRecorders Profiles Editor")
         self.setMinimumWidth(420)
         self.setMinimumHeight(500)
+        # Resolve theme once per window. Color scheme changes during the
+        # session require a relaunch (rare on macOS), so caching is fine.
+        self._theme = _theme_colors()
         # Input + helper styling. Keep QComboBox itself unstyled to preserve
         # the native macOS drop-down arrow, but restyle the popup list.
-        self.setStyleSheet("""
-            QLineEdit {
+        self.setStyleSheet(f"""
+            QLineEdit {{
                 padding: 4px 8px;
-            }
-            QComboBox QAbstractItemView {
+            }}
+            QComboBox QAbstractItemView {{
                 background-color: #2a2a2a;
                 border: 1px solid #3a3a3a;
                 padding: 4px 0;
                 outline: none;
-            }
-            QComboBox QAbstractItemView::item {
+            }}
+            QComboBox QAbstractItemView::item {{
                 padding: 6px 14px;
                 min-height: 22px;
                 color: #e0e0e0;
                 border: none;
-            }
-            QComboBox QAbstractItemView::item:selected {
+            }}
+            QComboBox QAbstractItemView::item:selected {{
                 background-color: #2b78ff;
                 color: white;
-            }
-            HelperLabel {
-                color: #8a8a8a;
+            }}
+            HelperLabel {{
+                color: {self._theme['tertiary_text']};
                 background-color: transparent;
-                border: 1px solid #5a5a5a;
+                border: 1px solid {self._theme['border']};
                 border-radius: 7px;
                 font-weight: bold;
                 font-size: 10px;
-            }
-            HelperLabel:hover {
+            }}
+            HelperLabel:hover {{
                 color: white;
                 background-color: #2b78ff;
                 border: 1px solid #2b78ff;
-            }
+            }}
         """)
 
         # Template is loaded once (embedded resource, never reloaded at runtime);
@@ -229,6 +269,12 @@ class ProfileEditor(QWidget):
         self.out_name = "Profiles_custom.ini"
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
         self.drift_banner: QFrame | None = None
+        # Signatures of drift states the user has explicitly dismissed in this
+        # session. Each signature is (sorted missing tuple, sorted dropped
+        # tuple); a banner with a previously-dismissed signature is silently
+        # skipped on rebuild, so reopening a file with the same drift profile
+        # doesn't keep nagging the user.
+        self._dismissed_drift_signatures: set[tuple] = set()
         # Parse the user file once at load. user_parsed is the authoritative
         # snapshot of disk values; widget edits land in self.cache and override
         # user_parsed at save time.
@@ -249,19 +295,19 @@ class ProfileEditor(QWidget):
         about_btn.setCursor(Qt.PointingHandCursor)
         about_btn.setMouseTracking(True)
         about_btn.setFixedSize(28, 28)
-        about_btn.setStyleSheet("""
-            QToolButton {
-                color: #8a8a8a;
+        about_btn.setStyleSheet(f"""
+            QToolButton {{
+                color: {self._theme['tertiary_text']};
                 background-color: transparent;
-                border: 1px solid #5a5a5a;
+                border: 1px solid {self._theme['border']};
                 border-radius: 14px;
                 font-weight: bold;
-            }
-            QToolButton:hover {
+            }}
+            QToolButton:hover {{
                 color: white;
                 background-color: #2b78ff;
                 border: 1px solid #2b78ff;
-            }
+            }}
         """)
         about_btn.clicked.connect(self.show_about)
         header_layout.addWidget(about_btn)
@@ -275,7 +321,7 @@ class ProfileEditor(QWidget):
         open_btn.clicked.connect(self.open_ini_file)
         source_layout.addWidget(open_btn)
         self.source_path_label = QLabel()
-        self.source_path_label.setStyleSheet("color: #a0a0a0;")
+        self.source_path_label.setStyleSheet(f"color: {self._theme['secondary_text']};")
         self.source_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         # Width cap so a long resolved path doesn't push the layout; full
         # path stays available via tooltip.
@@ -314,6 +360,16 @@ class ProfileEditor(QWidget):
         profile_layout.addStretch(1)
         layout.addLayout(profile_layout)
 
+        # First-launch onboarding banner slot. Shown when the user has never
+        # opened a real file via "Ouvrir un fichier…" so they understand they
+        # are currently editing the embedded demo template, not their device's
+        # Profiles.ini. Lives in its own slot above the drift banner.
+        self.onboarding_banner: QFrame | None = None
+        self.onboarding_banner_slot = QVBoxLayout()
+        self.onboarding_banner_slot.setContentsMargins(0, 8, 0, 0)
+        layout.addLayout(self.onboarding_banner_slot)
+        self._refresh_onboarding_banner()
+
         # Schema-drift banner slot: an empty layout that hosts the (re)built
         # banner. Keeping it as a dedicated slot lets us swap the banner on
         # every file reload without messing with insertion indices. Small
@@ -338,7 +394,7 @@ class ProfileEditor(QWidget):
         dir_layout.addWidget(browse_btn)
 
         self.out_dir_label = QLabel(str(self.out_dir.resolve()))
-        self.out_dir_label.setStyleSheet("color: #a0a0a0;")
+        self.out_dir_label.setStyleSheet(f"color: {self._theme['secondary_text']};")
         self.out_dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         dir_layout.addWidget(self.out_dir_label, stretch=1)
         layout.addLayout(dir_layout)
@@ -372,7 +428,7 @@ class ProfileEditor(QWidget):
         layout.addWidget(separator)
         footer = QLabel(f"© Alexandre LANGLAIS & Zaratan - 2026 - v{BUILD_VERSION}")
         footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet("color: #a0a0a0; font-size: 10px;")
+        footer.setStyleSheet(f"color: {self._theme['secondary_text']}; font-size: 10px;")
         layout.addWidget(footer)
 
         self.setLayout(layout)
@@ -404,18 +460,69 @@ class ProfileEditor(QWidget):
         )
         if not path:
             return
+        # Stash previous state so we can restore it on parse failure — the
+        # user shouldn't lose their session because they clicked on a bad file.
+        previous_path = self.ini_path
         self.ini_path = Path(path)
-        self._parse_user_file()
+        try:
+            self._parse_user_file()
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            self.ini_path = previous_path
+            QMessageBox.critical(
+                self,
+                "Fichier illisible",
+                f"Impossible de lire « {Path(path).name} ».\n\n"
+                f"Détail technique : {exc}\n\n"
+                f"Le fichier précédent reste chargé.",
+            )
+            return
+        # Mark that the user has explicitly loaded a real file at least once —
+        # silences the first-launch onboarding banner from now on.
+        QSettings().setValue("has_opened_file", True)
         # New file = fresh starting point: discard pending edits.
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
         self._set_source_path_label(self.ini_path)
+        self._refresh_onboarding_banner()
         self._refresh_drift_banner()
         self.build_form()
+
+    def _refresh_onboarding_banner(self) -> None:
+        """First-launch banner that tells the user they're currently editing
+        the embedded demo template, not their device's Profiles.ini. Hidden as
+        soon as ``has_opened_file`` is True in QSettings (set by open_ini_file
+        or save_profile)."""
+        if self.onboarding_banner is not None:
+            self.onboarding_banner_slot.removeWidget(self.onboarding_banner)
+            self.onboarding_banner.deleteLater()
+            self.onboarding_banner = None
+
+        if QSettings().value("has_opened_file", False, type=bool):
+            return
+
+        banner = QFrame()
+        banner.setStyleSheet(
+            "QFrame { background-color: #5a3a7a; border-radius: 4px; }"
+            "QLabel { color: white; }"
+        )
+        bl = QHBoxLayout(banner)
+        bl.setContentsMargins(10, 6, 6, 6)
+        bl.setSpacing(8)
+        msg = QLabel(
+            "Vous éditez actuellement le modèle de démonstration. "
+            "Cliquez sur <b>Ouvrir un fichier…</b> pour charger votre "
+            "<code>Profiles.ini</code>."
+        )
+        msg.setTextFormat(Qt.RichText)
+        msg.setWordWrap(True)
+        bl.addWidget(msg, stretch=1)
+        self.onboarding_banner_slot.addWidget(banner)
+        self.onboarding_banner = banner
 
     def _refresh_drift_banner(self) -> None:
         """Tear down the previous banner (if any) and rebuild it from the
         current missing/dropped state. Hides itself when there's nothing to
-        report.
+        report, or when the user has already dismissed this exact signature
+        in the session.
         """
         if self.drift_banner is not None:
             self.drift_banner_slot.removeWidget(self.drift_banner)
@@ -423,6 +530,16 @@ class ProfileEditor(QWidget):
             self.drift_banner = None
 
         if not self.missing_keys and not self.dropped_keys:
+            return
+
+        # Signature = the set of missing/dropped keys. A user who dismissed
+        # banner X and later opens a different file with the same X drift
+        # shouldn't see the banner again — they already acknowledged it.
+        signature = (
+            tuple(sorted(self.missing_keys)),
+            tuple(sorted(self.dropped_keys)),
+        )
+        if signature in self._dismissed_drift_signatures:
             return
 
         n_missing = len(self.missing_keys)
@@ -457,22 +574,27 @@ class ProfileEditor(QWidget):
         details_btn.setCursor(Qt.PointingHandCursor)
         details_btn.setStyleSheet(
             "QPushButton { color: white; background: transparent; "
-            "border: 1px solid #6e8fb5; border-radius: 3px; padding: 2px 8px; }"
+            "border: 1px solid #9bb5d6; border-radius: 3px; padding: 2px 8px; }"
             "QPushButton:hover { background-color: #3a6094; }"
         )
         details_btn.clicked.connect(self._show_drift_details)
         bl.addWidget(details_btn)
 
         dismiss_btn = QToolButton()
-        dismiss_btn.setText("✕")
-        dismiss_btn.setToolTip("Masquer cet avis")
+        dismiss_btn.setText("×")
+        dismiss_btn.setToolTip("Masquer (cette session)")
         dismiss_btn.setCursor(Qt.PointingHandCursor)
         dismiss_btn.setStyleSheet(
             "QToolButton { color: white; background: transparent; border: none; "
             "font-weight: bold; padding: 2px 6px; }"
             "QToolButton:hover { color: #ffd; }"
         )
-        dismiss_btn.clicked.connect(banner.hide)
+
+        def _on_dismiss():
+            self._dismissed_drift_signatures.add(signature)
+            banner.hide()
+
+        dismiss_btn.clicked.connect(_on_dismiss)
         bl.addWidget(dismiss_btn)
 
         self.drift_banner_slot.addWidget(banner)
@@ -533,13 +655,13 @@ class ProfileEditor(QWidget):
         layout.setSpacing(6)
 
         label = QLabel(text.upper())
-        label.setStyleSheet("""
-            QLabel {
-                color: #9a9a9a;
+        label.setStyleSheet(f"""
+            QLabel {{
+                color: {self._theme['subtitle']};
                 font-size: 11px;
                 font-weight: 600;
                 letter-spacing: 0.5px;
-            }
+            }}
         """)
         label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         # Reserve generous vertical room — macOS dark theme otherwise clips
@@ -678,6 +800,7 @@ class ProfileEditor(QWidget):
                     elif key in ["StartDate", "EndDate"]:
                         widget.setPlaceholderText("JJ/MM ou --/--")
                     widget.textChanged.connect(lambda v, k=key: self.update_cache(k, v))
+                    widget.textChanged.connect(lambda _v, k=key: self._live_clear_error(k))
 
                 elif meta["type"] == "combo":
                     widget = QComboBox()
@@ -694,12 +817,16 @@ class ProfileEditor(QWidget):
                     widget.currentIndexChanged.connect(
                         lambda i, k=key, c=choices: self.update_cache(k, c[i])
                     )
+                    widget.currentIndexChanged.connect(
+                        lambda _i, k=key: self._live_clear_error(k)
+                    )
 
                 elif meta["type"] == "int":
                     widget = QLineEdit(val)
                     widget.setValidator(QIntValidator(meta["min"], meta["max"]))
                     widget.setPlaceholderText(f"Entier {meta['min']}–{meta['max']}")
                     widget.textChanged.connect(lambda v, k=key: self.update_cache(k, v))
+                    widget.textChanged.connect(lambda _v, k=key: self._live_clear_error(k))
 
                 elif meta["type"] == "float":
                     widget = QLineEdit(val)
@@ -713,9 +840,10 @@ class ProfileEditor(QWidget):
                     else:
                         # Optionnel : garder la locale système pour les autres floats
                         validator.setLocale(QLocale.system())
-    
+
                     widget.setValidator(validator)
                     widget.textChanged.connect(lambda v, k=key: self.update_cache(k, v))
+                    widget.textChanged.connect(lambda _v, k=key: self._live_clear_error(k))
 
                 widget.setMinimumWidth(140)
                 widget.setMaximumWidth(220)
@@ -767,7 +895,11 @@ class ProfileEditor(QWidget):
 
     def _current_value(self, key: str) -> str:
         """Read the current value of a field — widget first (truth in UI),
-        then cache, then disk, then FIELDS default."""
+        then cache, then disk, then FIELDS default. Always reflects the
+        *displayed* profile; for cross-profile reads (e.g. save-time
+        validation of profiles not currently shown), use
+        ``_read_profile_value(pid, key)`` instead.
+        """
         widget = self.inputs.get(key)
         if isinstance(widget, QComboBox):
             data = widget.currentData()
@@ -775,7 +907,18 @@ class ProfileEditor(QWidget):
                 return str(data)
         elif isinstance(widget, QLineEdit):
             return widget.text().strip()
-        pid = self.profile_id
+        return self._read_profile_value(self.profile_id, key)
+
+    def _read_profile_value(self, pid: str, key: str) -> str:
+        """Read a field value for an arbitrary profile, independent of
+        whatever profile is currently displayed in the UI. Order: cache (live
+        edits) → user_parsed (disk snapshot) → FIELDS default.
+
+        save_profile uses this to validate Profile_3/4/5 while Profile_2 is
+        on screen — without it, validation would only catch problems in the
+        profile the user happens to be looking at, and the other four could
+        ship garbage values silently.
+        """
         cached = self.cache.get(pid, {}).get(key)
         if cached is not None:
             return cached
@@ -784,15 +927,24 @@ class ProfileEditor(QWidget):
             key, str(FIELDS.get(key, {}).get("default", ""))
         )
 
-    def _compute_enabled_map(self) -> dict[str, bool]:
-        """Decide which fields are active given the current OpMode /
-        SampFreqU / ThresholdType / device type. Fields not mentioned default
-        to enabled.
+    def _compute_enabled_map(self, pid: str | None = None) -> dict[str, bool]:
+        """Decide which fields are active given the OpMode / SampFreqU /
+        ThresholdType / device type *of the profile identified by pid*.
+        ``pid=None`` (the default) targets the currently-displayed profile
+        and reads from widgets, which is what reactive UI paths
+        (apply_conditional_visibility) want. ``pid="3"`` targets Profile_3
+        and reads from cache/disk — used by save-time per-profile
+        validation. Fields not mentioned default to enabled.
         """
         enabled: dict[str, bool] = {k: True for k in FIELDS}
-        op_mode = self._current_value("OpMode")
-        samp_us = self._current_value("SampFreqU")
-        threshold_type = self._current_value("ThresholdType")
+        if pid is None or pid == self.profile_id:
+            op_mode = self._current_value("OpMode")
+            samp_us = self._current_value("SampFreqU")
+            threshold_type = self._current_value("ThresholdType")
+        else:
+            op_mode = self._read_profile_value(pid, "OpMode")
+            samp_us = self._read_profile_value(pid, "SampFreqU")
+            threshold_type = self._read_profile_value(pid, "ThresholdType")
         device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
 
         # --- Hardware-scoped fields. Grey out anything that doesn't apply to
@@ -974,9 +1126,11 @@ class ProfileEditor(QWidget):
         (border, MessageBox, etc.).
         """
         meta = FIELDS[key]
-        val = raw
+        val = (raw or "").strip()
         if meta["type"] == "text":
             if key in ("ProfileName", "WavPrefix"):
+                if not val:
+                    return None, "champ requis"
                 limit = meta.get("limit")
                 if limit and len(val) > limit:
                     return None, f"limité à {limit} caractères"
@@ -998,20 +1152,24 @@ class ProfileEditor(QWidget):
             return val, None
 
         if meta["type"] == "int":
+            if not val:
+                return None, "champ requis"
             try:
                 val_int = int(val)
             except (ValueError, TypeError):
-                val_int = meta.get("default", meta["min"])
+                return None, "valeur numérique attendue"
             if not (meta["min"] <= val_int <= meta["max"]):
                 return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
             return str(val_int), None
 
         if meta["type"] == "float":
-            normalized = (val or "").strip().replace(",", ".")  # accept comma input
+            if not val:
+                return None, "champ requis"
+            normalized = val.replace(",", ".")  # accept comma input
             try:
                 val_f = float(normalized)
             except (ValueError, TypeError):
-                val_f = meta.get("default", meta["min"])
+                return None, "valeur numérique attendue"
             if not (meta["min"] <= val_f <= meta["max"]):
                 return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
             step = meta.get("step")
@@ -1023,14 +1181,20 @@ class ProfileEditor(QWidget):
         # combo: stored as-is (the choice value was already extracted via userData)
         return val, None
 
-    def _validate_cross_field(self, enabled: dict[str, bool]) -> list[tuple[str, str]]:
-        """Return [(key, message), ...] for cross-field constraint violations.
+    def _validate_cross_field(self, enabled: dict[str, bool], pid: str | None = None) -> list[tuple[str, str]]:
+        """Return [(key, message), ...] for cross-field constraint violations
+        for the profile identified by pid (None = current displayed profile).
         Skips checks involving greyed-out fields so the user isn't yelled at
         about a mode they're not in."""
 
+        def read(k: str) -> str:
+            if pid is None or pid == self.profile_id:
+                return self._current_value(k)
+            return self._read_profile_value(pid, k)
+
         def as_int(k: str) -> int | None:
             try:
-                return int(self._current_value(k))
+                return int(read(k))
             except (ValueError, TypeError):
                 return None
 
@@ -1052,7 +1216,7 @@ class ProfileEditor(QWidget):
 
         # Nyquist: max active frequency (Hz) must be ≤ SampFreq/2.
         # SampFreqU is stored as a kHz string ("384"). Nyquist_Hz = kHz × 500.
-        samp_us = self._current_value("SampFreqU")
+        samp_us = read("SampFreqU")
         try:
             nyquist = int(samp_us) * 500
         except (ValueError, TypeError):
@@ -1103,6 +1267,20 @@ class ProfileEditor(QWidget):
         for key in list(self.field_errors):
             self._set_field_error(key, False)
 
+    def _live_clear_error(self, key: str) -> None:
+        """Wired on every input widget. Re-runs single-field validation as the
+        user types/picks; clears the red border + error tooltip the moment
+        the value becomes valid. No-op when the field isn't currently flagged
+        (avoids running the validator on every keystroke for fields that were
+        never erroneous in the first place).
+        """
+        if key not in self.field_errors:
+            return
+        raw = self._current_value(key)
+        _, err = self._validate_and_normalize(key, raw)
+        if err is None:
+            self._set_field_error(key, False)
+
     def _collect_overrides(self) -> dict[str, dict[str, str]]:
         """Build the {section: {key: value}} overrides dict from the user file
         plus the current UI cache. The cache takes precedence over disk values,
@@ -1126,72 +1304,151 @@ class ProfileEditor(QWidget):
 
     def save_profile(self):
         self.sync_widgets_to_cache()
-        pid = self.profile_id
-        section = f"Profile_{pid}"
 
         # Wipe any leftover error borders from the previous attempt.
         self._clear_field_errors()
 
-        errors: list[tuple[str, str]] = []  # (key, human message)
-        enabled = self._compute_enabled_map()
+        # Errors are collected across ALL 4 editable profiles, not just the
+        # one currently displayed. Without this, a user who edits Profile_3,
+        # switches back to Profile_2, and saves would write whatever invalid
+        # state Profile_3 was left in — silently, since validation only ran
+        # on the visible profile. (cf. lead-engineer review C1.)
+        all_errors: list[tuple[str, str, str]] = []  # (pid, key, human message)
+        enabled_by_pid: dict[str, dict[str, bool]] = {}
 
-        # 1. Per-field validation. Greyed-out fields are still validated so
-        # we never write garbage that the firmware would silently reject —
-        # but their errors are NOT surfaced to the user (the field isn't
-        # relevant in the current mode, so reporting the issue would just
-        # be noise). Invalid greyed values are silently coerced to default.
-        for key, meta in FIELDS.items():
-            raw = self.cache[pid].get(
-                key,
-                self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))),
-            )
-            normalized, err = self._validate_and_normalize(key, raw)
-            is_active = enabled.get(key, True)
-            if err is not None:
-                if is_active:
-                    errors.append((key, err))
+        for pid in PROFILE_LABELS.values():
+            section = f"Profile_{pid}"
+            # Each profile gets its own enabled map: a field greyed in
+            # Profile_2 (because its OpMode != Heterodyne) may be active in
+            # Profile_3 (which IS Heterodyne). _compute_enabled_map(pid)
+            # reads that profile's controllers from cache, not widgets.
+            enabled = self._compute_enabled_map(pid)
+            enabled_by_pid[pid] = enabled
+
+            # 1. Per-field validation. Greyed-out fields are still validated
+            # so we never write garbage that the firmware would silently
+            # reject — but their errors are NOT surfaced (the field isn't
+            # relevant in this profile's current mode). Invalid greyed
+            # values are silently coerced to the firmware default.
+            for key, meta in FIELDS.items():
+                raw = self.cache.get(pid, {}).get(
+                    key,
+                    self.user_parsed.get(section, {}).get(
+                        key, str(meta.get("default", ""))
+                    ),
+                )
+                normalized, err = self._validate_and_normalize(key, raw)
+                is_active = enabled.get(key, True)
+                if err is not None:
+                    if is_active:
+                        all_errors.append((pid, key, err))
+                    else:
+                        self.cache.setdefault(pid, {})[key] = str(
+                            meta.get("default", meta.get("min", ""))
+                        )
                 else:
-                    # Silently coerce greyed-out field to its default.
-                    self.cache[pid][key] = str(
-                        meta.get("default", meta.get("min", ""))
-                    )
-            else:
-                self.cache[pid][key] = normalized
+                    self.cache.setdefault(pid, {})[key] = normalized
 
-        # 2. Cross-field constraints (ordering, Nyquist).
-        errors.extend(self._validate_cross_field(enabled))
+            # 2. Cross-field constraints (ordering, Nyquist) for this profile.
+            for key, msg in self._validate_cross_field(enabled, pid):
+                all_errors.append((pid, key, msg))
 
-        if errors:
-            # Highlight every faulty field (with per-widget tooltip recap),
-            # switch to the tab of the first one, surface a single summary
-            # dialog. The user fixes everything in one pass instead of
-            # one-MessageBox-per-error.
-            for key, msg in errors:
-                self._set_field_error(key, True, msg)
-            first_key = errors[0][0]
-            tab_idx = self.field_tab_index.get(first_key)
-            if tab_idx is not None:
-                self.tabs.setCurrentIndex(tab_idx)
-            # Focus the first faulty widget so the user can start typing
-            # the correction immediately.
-            first_widget = self.inputs.get(first_key)
-            if first_widget is not None:
-                first_widget.setFocus()
-            lines = [
-                f"  • {FIELDS.get(k, {}).get('tag', k)} : {msg}"
-                for k, msg in errors
-            ]
+        # 3. Cluster-wide check (C7): on PRS-S in Synchro mode, the cluster
+        # needs exactly one Master (MasterSlave=0). Two Profile_N with
+        # MasterSlave=0 + OpMode=Synchro is a config bug — flag every
+        # colliding profile so the user knows which ones to renumber.
+        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
+        if device_type == "PRS-S":
+            masters: list[str] = []
+            for pid in PROFILE_LABELS.values():
+                if (
+                    self._read_profile_value(pid, "OpMode") == "Synchro"
+                    and self._read_profile_value(pid, "MasterSlave") == "0"
+                ):
+                    masters.append(pid)
+            if len(masters) > 1:
+                for pid in masters:
+                    all_errors.append((
+                        pid,
+                        "MasterSlave",
+                        f"plusieurs profils Synchro avec Maître (0) dans le cluster — "
+                        f"profils en conflit : {', '.join(masters)}",
+                    ))
+
+        if all_errors:
+            # If errors live on a profile that isn't currently shown, switch
+            # to that profile first so the highlights/focus land somewhere
+            # visible. Group errors by profile for the summary dialog.
+            first_pid = all_errors[0][0]
+            if first_pid != self.profile_id:
+                label = next(
+                    (lbl for lbl, p in PROFILE_LABELS.items() if p == first_pid),
+                    None,
+                )
+                if label is not None:
+                    # Update the combo (which fires change_profile → build_form).
+                    self.profile_combo.setCurrentText(label)
+
+            # Highlight every faulty field on the currently-displayed profile;
+            # other profiles' errors live in the dialog only (no widget to
+            # paint), but switching to them will rebuild the form and they
+            # can re-trigger save to see them locally.
+            for pid, key, msg in all_errors:
+                if pid == self.profile_id:
+                    self._set_field_error(key, True, msg)
+            first_visible = next(
+                ((k, m) for p, k, m in all_errors if p == self.profile_id),
+                None,
+            )
+            if first_visible is not None:
+                k, _ = first_visible
+                tab_idx = self.field_tab_index.get(k)
+                if tab_idx is not None:
+                    self.tabs.setCurrentIndex(tab_idx)
+                widget = self.inputs.get(k)
+                if widget is not None:
+                    widget.setFocus()
+
+            # Group lines by profile so the user reads them as 4 sections
+            # max ("Profile 2 :", "Profile 3 :", …) instead of a flat list.
+            pid_to_label = {v: k for k, v in PROFILE_LABELS.items()}
+            grouped: dict[str, list[str]] = {}
+            for pid, key, msg in all_errors:
+                grouped.setdefault(pid, []).append(
+                    f"  • {FIELDS.get(key, {}).get('tag', key)} : {msg}"
+                )
+            sections_out: list[str] = []
+            for pid in PROFILE_LABELS.values():
+                if pid not in grouped:
+                    continue
+                sections_out.append(f"{pid_to_label[pid]} :")
+                sections_out.extend(grouped[pid])
+                sections_out.append("")
             QMessageBox.warning(
                 self,
                 "Erreurs de validation",
-                "Veuillez corriger les paramètres suivants :\n\n" + "\n".join(lines),
+                "Veuillez corriger les paramètres suivants :\n\n"
+                + "\n".join(sections_out).strip(),
             )
             return
 
         # Render the output file from the canonical template, injecting the
         # validated values. This guarantees the output is always complete and
         # firmware-aligned, regardless of what was missing in the input.
-        self.out_name = self.out_name_edit.text().strip() or "Profiles_custom.ini"
+        # Strip any path component from the user-typed name: ``Path("dir") /
+        # "/abs"`` returns ``/abs`` (Path semantics), so an absolute path or a
+        # "../escape" would let the save write anywhere on disk. We force a
+        # bare filename under out_dir, and add the .ini extension if missing.
+        raw_name = self.out_name_edit.text().strip() or "Profiles_custom.ini"
+        bare = Path(raw_name).name or "Profiles_custom.ini"
+        if not bare.lower().endswith(".ini"):
+            bare += ".ini"
+        self.out_name = bare
         out_path = self.out_dir / self.out_name
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         save_with_template(self._collect_overrides(), out_path)
+        # A successful save is enough to consider the user past the
+        # onboarding stage even if they haven't loaded a file yet.
+        QSettings().setValue("has_opened_file", True)
+        self._refresh_onboarding_banner()
         QMessageBox.information(self, "Succès", f"Profil sauvegardé dans {out_path}")

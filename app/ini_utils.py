@@ -38,9 +38,25 @@ def resource_path(relative_path: str) -> Path:
 # --- Low-level I/O -----------------------------------------------------------
 
 def load_lines(path: Path | str) -> list[str]:
-    """Read an INI file as a list of raw lines (newlines kept)."""
-    with open(path, encoding="utf-8") as f:
-        return f.readlines()
+    """Read an INI file as a list of raw lines (newlines kept).
+
+    Tries UTF-8 with BOM, plain UTF-8, then Latin-1. The fallback chain
+    tolerates files exported by Windows tools (CP1252/Latin-1 accents in
+    ``ProfileName``) and Notepad's BOM, both of which crashed the strict
+    UTF-8 reader.
+    """
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            with open(path, encoding=enc) as f:
+                return f.readlines()
+        except UnicodeDecodeError:
+            continue
+    # latin-1 decodes every byte, so reaching this is effectively impossible;
+    # keep an explicit raise so a future regression surfaces.
+    raise UnicodeDecodeError(
+        "ini_utils", b"", 0, 1,
+        f"Unable to decode {path} with utf-8-sig, utf-8 or latin-1",
+    )
 
 
 def load_template_lines() -> list[str]:

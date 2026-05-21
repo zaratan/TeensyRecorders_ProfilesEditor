@@ -4,6 +4,24 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+### Corrigé (bloquants post-review 3-agents)
+- **`HeterodyneMode` / `Pre-HeterSelectiveFilter` exposés à 0..3** au lieu de 0/1. Le firmware (`Const.h:715-740` : `HAM_MAX=4`, `HSF_MAX=4`) accepte 4 modes pour chacun : Manuel / Auto / Toujours manuel / Toujours auto, et NoSel / Selective / AlwaysNoSel / AlwaysSel. Un profil hérité contenant 2 ou 3 était silencieusement coercé à 0 (« Manuel » / « Non ») au save. Combos étendus + libellés FR explicites.
+- **Validation par-profil** : `save_profile` validait uniquement le profil courant, alors que `_collect_overrides` émet les **4 profils** depuis leur cache. Un utilisateur qui édite Profile_3 (avec une valeur invalide), switch sur Profile_2 et save écrivait Profile_3 sans avertissement. Validation et `_compute_enabled_map` désormais paramétrés par `pid`, erreurs collectées sur les 4 profils ; auto-switch vers le 1er profil en faute ; dialogue groupé par profil. Cohérent avec l'asymétrie write/read du firmware.
+- **Validation cluster PRS-S Maître/Esclave** : un avertissement bloquant est levé si plusieurs profils ont `OpMode=Synchro` ET `MasterSlave=0`. Permet d'éviter la configuration cluster invalide (deux maîtres).
+- **`out_name` réduit au nom de fichier seul** : `Path("dir") / "/absolu"` retourne `/absolu` (sémantique Path) — l'utilisateur pouvait saisir un chemin absolu ou `../escape` et écrire hors du dossier de sortie choisi. Le champ est désormais réduit à `Path(name).name` avec ajout automatique de l'extension `.ini`.
+- **Encoding fallback à la lecture** : `load_lines` tentait UTF-8 strict, ce qui crashait l'app sur un fichier exporté depuis un outil Windows (CP1252/Latin-1, ou BOM Notepad). Tente désormais utf-8-sig → utf-8 → latin-1. `open_ini_file` enveloppe l'erreur de parsing dans un `QMessageBox.critical` lisible et restaure le fichier précédent — plus de crash silencieux.
+- **Champs vides explicitement rejetés** : un `RelativeThreshold` vidé par l'utilisateur retournait `("18", None)` (default firmware) via le `try/except`, l'utilisateur perdait visibilité sur la valeur réellement écrite. `_validate_and_normalize` lève désormais « champ requis » sur empty string pour int/float et ProfileName/WavPrefix.
+
+### Corrigé (UX bloquants)
+- **Contraste AA en Light Mode** : les hex gris (`#a0a0a0`, `#9a9a9a`, `#8a8a8a`, `#5a5a5a`) étaient calibrés dark mode uniquement et tombaient à ~2.6:1 sur fond blanc — sous-titres, footer, path label et icônes d'aide illisibles. Ajout d'un helper `_theme_colors()` qui détecte `Qt.ColorScheme.Dark` via `QApplication.styleHints()` et expose des tokens `secondary_text/subtitle/tertiary_text/border` calibrés pour AA dans les deux modes.
+- **Drift banner — bouton « Voir détails » contrast 2.56:1 → 5.2:1** : bordure `#6e8fb5` (fail AA composant UI) → `#9bb5d6` sur fond `#2b4d7a`.
+- **Dismiss banner par signature** : le dismiss ne survivait pas à un rechargement de fichier (banner détruite à chaque `_refresh_drift_banner`). Persisté désormais sous forme de signature `(missing_keys, dropped_keys)` dans `self._dismissed_drift_signatures`. Réouvrir un fichier avec la même dérive ne ressuscite plus la banner ; une signature différente la fait réapparaître normalement. Tooltip mis à jour : « Masquer (cette session) ». Caractère `✕` → `×` (convention macOS).
+- **Banner d'onboarding au premier lancement** : à la première ouverture (avant qu'un fichier ait jamais été chargé via « Ouvrir un fichier… »), une banner violette (`#5a3a7a`) explique que l'utilisateur édite actuellement le modèle de démonstration. Disparaît dès qu'un fichier est ouvert ou qu'un save réussit (`QSettings.has_opened_file=True`).
+- **Bordure rouge live-clear** : la bordure rouge + tooltip d'erreur persistaient jusqu'au prochain save même après correction. Slot `_live_clear_error(key)` connecté sur tous les `textChanged`/`currentIndexChanged` : revalide en arrière-plan et efface l'erreur dès que la valeur passe valide. Early return si la clé n'est pas dans `field_errors` (zéro coût sur les keystrokes des champs non-fautifs).
+
+### Tests
+- **`tests/smoke_test_v07.py`** (nouveau) : 8 checks end-to-end couvrant chaque bloquant post-review (C1/C2/C4/C5/C6/C7, 🔴-3, 🔴-4, B). Sandbox QSettings dans `tempdir`, mock des `QMessageBox.*` pour éviter le blocage modal en mode headless. Exécutable seul (`python tests/smoke_test_v07.py`).
+
 ---
 
 ## [0.7.0] - 2026-05-21
