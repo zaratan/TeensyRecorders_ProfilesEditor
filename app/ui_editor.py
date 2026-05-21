@@ -507,6 +507,7 @@ class ProfileEditor(QWidget):
         layout.addWidget(separator)
 
         form_layout.addRow(container)
+        return container
 
     # Label avec helper
     def make_label_with_helper(self, key: str):
@@ -550,9 +551,13 @@ class ProfileEditor(QWidget):
         #   field_tab_index[key]   → which tab the field lives in (for auto-switch)
         #   field_label[key]       → its label container (so we can grey it
         #                            together with the input)
+        #   subtitle_groups        → (subtitle widget, [field keys below it]) so
+        #                            we can grey the subtitle once every field
+        #                            beneath it is inactive
         self.field_tab_index: dict[str, int] = {}
         self.field_label: dict[str, QWidget] = {}
         self.field_errors: set[str] = set()
+        self.subtitle_groups: list[tuple[QWidget, list[str]]] = []
         pid = self.profile_id
         section = f"Profile_{pid}"
 
@@ -566,7 +571,8 @@ class ProfileEditor(QWidget):
             # -------- Sous-titre en tête d'un onglet
             title = SUBTITLES.get((section_name, None))
             if title:
-                self.add_subtitle(form_layout, title)
+                sub = self.add_subtitle(form_layout, title)
+                self.subtitle_groups.append((sub, []))
             # ---------------------------------------
 
             for key in keys:
@@ -574,7 +580,12 @@ class ProfileEditor(QWidget):
                 # -------- Sous-titre dans les onglets
                 title = SUBTITLES.get((section_name, key))
                 if title:
-                    self.add_subtitle(form_layout, title)
+                    sub = self.add_subtitle(form_layout, title)
+                    self.subtitle_groups.append((sub, []))
+
+                # Track this field under the most recently added subtitle (if any).
+                if self.subtitle_groups:
+                    self.subtitle_groups[-1][1].append(key)
 
                 meta = FIELDS[key]
                 # ---------------------------------------
@@ -725,11 +736,30 @@ class ProfileEditor(QWidget):
         elif threshold_type == "1":
             enabled["RelativeThreshold"] = False
 
+        # --- Fixed P. Proto. (PROTFIXE) is the only Vigie-Chiro protocol
+        # persisted in a profile (Pédestre / Routier are coerced to
+        # RECAUTO/PHETER at every cold boot, so they aren't even offered in
+        # the OpMode combo). Point Fixe overrides 12 params at BeginMode
+        # (cf. CModeRecorder.cpp:1367-1384) — we grey them out so the user
+        # understands their profile values are ignored in that mode.
+        if op_mode == "Fixed P. Proto.":
+            for k in (
+                "SampFreqU", "LowpassFilter", "HighpassFilter", "fHighpassFilter",
+                "NumericGain", "Exp10",
+                "MinFreqUS", "MaxFreqUS",
+                "ThresholdType", "RelativeThreshold",
+                "NbDetect",
+                "MinDuration", "MaxDuration",
+            ):
+                enabled[k] = False
+
         return enabled
 
     def apply_conditional_visibility(self) -> None:
         """Grey out fields that don't apply to the current OpMode / SampFreq /
-        ThresholdType. Greyed widgets keep their value (no reset on toggle)."""
+        ThresholdType / Vigie-Chiro protocol. Greyed widgets keep their value
+        (no reset on toggle). Subtitle headers grey out when all the fields
+        below them are inactive."""
         enabled = self._compute_enabled_map()
         for key, widget in self.inputs.items():
             is_on = enabled.get(key, True)
@@ -737,6 +767,10 @@ class ProfileEditor(QWidget):
             label = self.field_label.get(key)
             if label is not None:
                 label.setEnabled(is_on)
+        # Subtitles inherit greying when none of their fields are still active.
+        for subtitle_widget, fields in self.subtitle_groups:
+            any_active = any(enabled.get(k, True) for k in fields) if fields else True
+            subtitle_widget.setEnabled(any_active)
 
     def change_profile(self, label):
         self.sync_widgets_to_cache()

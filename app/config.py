@@ -20,11 +20,16 @@ except ImportError:
 FIELDS = {
     # ---- Profil ----
     "ProfileName": {"type": "text", "limit": 11, "tag": "Nom de profil", "helper":"Nom du profil tel qu’il apparaît dans le TeensyRecorder."},
+    # Walkin. Protoc. (PROTPED) and Road Protocol (PROTROUT) are intentionally
+    # NOT exposed here. The firmware coerces these modes back to RECAUTO/PHETER
+    # at every cold boot (cf. CModeGeneric.cpp:864-873), so persisting them in
+    # a profile is silently ineffective. Both Vigie-Chiro session protocols are
+    # activated manually from the device menu, per recording session.
     "OpMode": {"type": "combo", "choices": [
-        "Auto record","Walkin. Protoc.","Road Protocol",
+        "Auto record",
         "Fixed P. Proto.","RhinoLogger","Heterodyne",
         "Timed recording","Audio Rec.","Synchro"
-    ], "tag":"Mode d'enregistrement", "helper":"Mode de fonctionnement principal du TeensyRecorder."},
+    ], "default": "Auto record", "tag":"Mode d'enregistrement", "helper":"Mode de fonctionnement principal du TeensyRecorder."},
     "MasterSlave": {"type": "int", "min": 0, "max": 9, "step": 1, "default": 0, "tag": "Maître/Esclave", "helper": "Rôle dans un cluster synchronisé (PRS-S) : 0 = Maître ; 1 à 9 = Esclave numéroté. Un seul Maître par cluster."},
 
     # ---- Horaires ----
