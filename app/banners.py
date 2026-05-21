@@ -109,7 +109,9 @@ def build_drift_banner(
 
     dismiss_btn = QToolButton()
     dismiss_btn.setText("×")
-    dismiss_btn.setToolTip("Masquer (cette session)")
+    dismiss_btn.setToolTip(
+        "Masquer pour cette session — réapparaîtra au prochain lancement"
+    )
     dismiss_btn.setCursor(Qt.PointingHandCursor)
     dismiss_btn.setStyleSheet(
         "QToolButton { color: white; background: transparent; border: none; "

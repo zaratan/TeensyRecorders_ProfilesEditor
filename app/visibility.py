@@ -122,11 +122,14 @@ def compute_enabled_map(
     # --- Hardware scope ---
     ar_active = (device == Device.AR)
     prs_active = (device in (Device.PRS, Device.PRS_S))
+    prs_s_active = (device == Device.PRS_S)
     for k, meta in FIELDS.items():
         scope = meta.get("scope")
         if scope == "AR" and not ar_active:
             enabled[k] = False
         elif scope == "PRS" and not prs_active:
+            enabled[k] = False
+        elif scope == "PRS-S" and not prs_s_active:
             enabled[k] = False
 
     # --- Build the rule context once ---

@@ -4,6 +4,20 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+### Polish (post-review UX round 3)
+- **Scope `PRS-S` dédié** : `MasterSlave`, `TopAudioFreq`, `TopDuration`, `TopPeriod`, `LEDSynchro` ne dépendent pas seulement du PRS — elles exigent un PRS-**S** (cluster Synchro). Le badge `PRS` rose-foncé `#a04a5a` (distinct du `PRS` ambre et de l'`AR` teal) signale désormais cette restriction plus stricte. Un utilisateur PR ou PRS sans -S ne verra plus ces 5 champs actifs.
+- **Affichage propre des floats firmware** : le firmware écrit avec `%f` (6 décimales) — `1.000000`, `0.500000`, `46.320000`. `_ini_to_ui` applique désormais `format(x, "g")` à tous les floats hors Lat/Lon, donc `1`, `0.5`, `46.32`. Latitude/Longitude gardent 6 décimales (précision GPS réelle).
+- **Messages d'erreur sans `.0` traînant** : « hors bornes (attendu 0.1–150.0) » → « hors bornes (attendu 0.1–150) » via `:g` sur les bornes int et float.
+- **Bouton « Sauvegarder » contraste AA** : `#2b78ff` (4.01:1 sur blanc, sous-AA texte normal) → `#1a5fd0` (5.83:1, AA-pass). Hover/pressed assombris cohérents.
+- **Focus ring keyboard nav** : `QPushButton:focus { outline: 2px solid #b0c8ff; }` sur le bouton Sauvegarder — sans cela, l'action primaire devenait invisible en navigation Tab.
+- **Sous-titres orphelins masqués** : un sous-titre dont tous les champs sont grisés (hardware-scope ou mode) passe désormais en `setVisible(False)` au lieu de rester grisé orphelin. Réduit la pollution visuelle dans les onglets contraints.
+- **`setMinimumWidth(720)` + `setMinimumHeight(700)`** : la fenêtre tronquait la combo « Passive Stéréo Synchro (PRS-S) » et imposait une scrollbar horizontale sous 700 px. Le minimum reflète les besoins réels (3 banners + header + 7 tabs + form + footer).
+- **Tooltip dismiss banner explicite** : « Masquer (cette session) » → « Masquer pour cette session — réapparaîtra au prochain lancement ». Lève l'ambiguïté permanent/session.
+- **Tooltip dossier sortie** : le label tronqué à 360px porte désormais un tooltip avec le chemin complet (cohérent avec le label de fichier source).
+- **Cluster collision message raccourci** : « plusieurs profils Synchro avec Maître (0) dans le cluster — profils en conflit : 2, 3 » → « doublon de Maître dans le cluster (profils 2, 3) ». Plus lisible quand le dialog affiche la même phrase sous chaque profil.
+- **Libellés FR** : sous-titre `Durée des événements` (mot ambigu en chiroptéro) → `Durée des enregistrements`. `(optionnelle)` retiré du sous-titre `Fenêtre calendaire` (incohérent avec les autres).
+- **Template ProfileName en FR** : `"Bats 384kHz"` / `"Bats 500kHz"` (anglais dans UI française) → `"Chiro 384"` / `"Chiro 500"`.
+
 ### Architecture (post-review S1-S8 + lead engineer round 2)
 - **`app/validation.py`** (nouveau, 207 LOC) — `validate_and_normalize`, `validate_cross_field`, `validate_master_slave_collision`. Pure functions, zéro Qt, testables sans `QApplication`. Extrait de `ui_editor.py`.
 - **`app/visibility.py`** (nouveau, 161 LOC) — `compute_enabled_map`, `opmode_disabled_for_device`, et `VISIBILITY_RULES` (liste déclarative `(predicate, fields_to_disable)` plutôt qu'un mini-DSL `visible_when`). Extrait de `ui_editor.py`.

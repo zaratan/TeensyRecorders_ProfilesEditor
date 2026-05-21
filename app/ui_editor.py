@@ -225,8 +225,12 @@ class ProfileEditor(QWidget):
         super().__init__()
         self.logo_path = logo_path
         self.setWindowTitle("TeensyRecorders Profiles Editor")
-        self.setMinimumWidth(420)
-        self.setMinimumHeight(500)
+        # 720×700 fits the 3 banners + header + 2 toolbars + tab strip + form
+        # + footer without truncating the "Passive Stéréo Synchro (PRS-S)"
+        # device combo or forcing a horizontal scrollbar. Smaller windows
+        # are perfectly readable; below this the layout starts to clip.
+        self.setMinimumWidth(720)
+        self.setMinimumHeight(700)
         # Resolve theme once per window. Color scheme changes during the
         # session require a relaunch (rare on macOS), so caching is fine.
         self._theme = _theme_colors()
@@ -419,6 +423,10 @@ class ProfileEditor(QWidget):
         self.out_dir_label = QLabel(str(self.out_dir.resolve()))
         self.out_dir_label.setStyleSheet(f"color: {self._theme['secondary_text']};")
         self.out_dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Width cap mirrors the source_path_label above so a long resolved
+        # path doesn't push the layout; full path stays available via tooltip.
+        self.out_dir_label.setMaximumWidth(360)
+        self.out_dir_label.setToolTip(str(self.out_dir.resolve()))
         dir_layout.addWidget(self.out_dir_label, stretch=1)
         layout.addLayout(dir_layout)
 
@@ -434,6 +442,9 @@ class ProfileEditor(QWidget):
             "border-radius: 4px; }"
             f"QPushButton:hover {{ background-color: {AppColors.PRIMARY_HOVER}; }}"
             f"QPushButton:pressed {{ background-color: {AppColors.PRIMARY_PRESSED}; }}"
+            # Visible focus ring for keyboard navigation (Tab) — without this
+            # the primary action becomes invisible to keyboard-only users.
+            "QPushButton:focus { outline: 2px solid #b0c8ff; outline-offset: 1px; }"
         )
         save_btn.clicked.connect(self.save_profile)
         save_layout.addWidget(save_btn)
@@ -891,19 +902,32 @@ class ProfileEditor(QWidget):
 
     @staticmethod
     def _ini_to_ui(key: str, val: str) -> str:
-        """Disk-format → UI-format conversion. Today only applies the
-        ``unit_factor`` divisor (Hz → kHz on the 4 Min/Max Freq fields);
-        every other field passes through unchanged. A bare ``float``
-        ``str()`` would emit "10.0" rather than "10" — fine for QLineEdit
-        and consistent with the FIELDS default style.
+        """Disk-format → UI-format conversion. Two transforms:
+
+        1. ``unit_factor`` divisor (Hz → kHz on the 4 Min/Max Freq
+           fields). Every non-factor field passes through unchanged at
+           this step.
+        2. For non-GPS floats, strip trailing-zero noise: the firmware
+           writes values with ``%f`` (6 decimals), so reading "1.000000"
+           back into a ``QLineEdit`` shows the user a wall of zeros that
+           overstates the actual precision. ``:g`` collapses to "1",
+           "0.5", "0.1" while preserving real precision when it exists.
+           Lat/Lon are excluded — those DO need 6 decimals.
         """
-        factor = FIELDS.get(key, {}).get("unit_factor")
-        if not factor:
-            return val
-        try:
-            return str(float(val) / factor)
-        except (ValueError, TypeError):
-            return val
+        meta = FIELDS.get(key, {})
+        factor = meta.get("unit_factor")
+        if factor:
+            try:
+                converted = float(val) / factor
+            except (ValueError, TypeError):
+                return val
+            return format(converted, "g")
+        if meta.get("type") == "float" and key not in ("Latitude", "Longitude"):
+            try:
+                return format(float(val), "g")
+            except (ValueError, TypeError):
+                return val
+        return val
 
     @staticmethod
     def _ui_to_ini(key: str, val: str) -> str:
@@ -989,10 +1013,16 @@ class ProfileEditor(QWidget):
             label = self.field_label.get(key)
             if label is not None:
                 label.setEnabled(is_on)
-        # Subtitles inherit greying when none of their fields are still active.
+        # Subtitle visibility cascade: hide a subtitle entirely when none of
+        # the fields beneath it are active (vs the previous ``setEnabled``
+        # which only dimmed it — an orphan dimmed subtitle with no fields
+        # below is visual noise that confuses the reader). When at least
+        # one field remains active, keep the subtitle visible at full
+        # opacity (Qt's setEnabled cascade would handle this automatically,
+        # but we're explicit so future maintainers see the intent).
         for subtitle_widget, fields in self.subtitle_groups:
             any_active = any(enabled.get(k, True) for k in fields) if fields else True
-            subtitle_widget.setEnabled(any_active)
+            subtitle_widget.setVisible(any_active)
 
         # Tab activation: disable the click and dim the label when no field
         # in that tab is active for the current mode. setTabEnabled handles
@@ -1029,7 +1059,9 @@ class ProfileEditor(QWidget):
         dir_ = QFileDialog.getExistingDirectory(self, "Choisir un dossier")
         if dir_:
             self.out_dir = Path(dir_)
-            self.out_dir_label.setText(str(self.out_dir.resolve()))
+            resolved = str(self.out_dir.resolve())
+            self.out_dir_label.setText(resolved)
+            self.out_dir_label.setToolTip(resolved)
 
     def _validate_and_normalize(self, key: str, raw: str) -> tuple[str | None, str | None]:
         """Delegate to ``validation.validate_and_normalize`` (pure, Qt-free).

@@ -50,10 +50,16 @@ class Device:
 class AppColors:
     """App-wide accent colours. Local hover/pressed shades and the dark-
     popup palette stay inline near their widget — these are the values
-    that recurred in multiple stylesheets and benefit from a single name."""
-    PRIMARY = "#2b78ff"                   # Save button bg, helper popup bg, combo selection, hover accent
-    PRIMARY_HOVER = "#1a5fd0"             # Save button hover
-    PRIMARY_PRESSED = "#144aa0"           # Save button pressed
+    that recurred in multiple stylesheets and benefit from a single name.
+
+    The PRIMARY shade was darkened from #2b78ff (~4.0:1 on white, sub-AA
+    for body text) to #1a5fd0 (~5.8:1, AA-passing) — the Save button text
+    is at the AA limit on the prior shade, and we don't want the most
+    important action in the UI to flunk accessibility.
+    """
+    PRIMARY = "#1a5fd0"                   # Save button bg, helper popup bg, combo selection, hover accent
+    PRIMARY_HOVER = "#144aa0"             # Save button hover
+    PRIMARY_PRESSED = "#0d3f8a"           # Save button pressed
     ERROR = "#e74c3c"                     # Validation error border + tooltip
     DRIFT_BANNER_BG = "#2b4d7a"           # Blue drift banner
     DRIFT_BANNER_BORDER = "#9bb5d6"       # Drift banner detail-button border (AA-passing)
@@ -85,7 +91,16 @@ SCOPE_BADGES = {
         # text bumped from ~3.4:1 (fails AA body text) to ~5.2:1 (passes AA).
         "color": "#8c5d12",
         "label": "PRS",
-        "tooltip": "Champ utilisé uniquement par le Passive Recorder Stéréo (PRS / PRS-S)",
+        "tooltip": "Champ utilisé sur Passive Recorder Stéréo (PRS et PRS-S)",
+    },
+    "PRS-S": {
+        # Distinct from PRS: cluster-only features (Synchro Master role,
+        # top synchro params, LED indicator). The badge advertises the
+        # narrower constraint so a PRS-without-S user doesn't mistake
+        # MasterSlave/TopAudioFreq for fields they can safely use.
+        "color": "#a04a5a",  # darker rose, distinct from the PRS amber and the AR teal
+        "label": "PRS-S",
+        "tooltip": "Champ utilisé uniquement par le PRS-S en mode Synchro",
     },
     "RhinoLogger": {
         "color": "#7b3aa8",  # purple
@@ -151,7 +166,7 @@ FIELDS = {
                   "• <b>Timed recording</b> : enregistrement périodique cadencé.<br>"
                   "• <b>Heterodyne</b> / <b>Audio Rec.</b> : réservés à l'Active Recorder.<br>"
                   "• <b>Synchro</b> : cluster PRS-S synchronisé LoRa."},
-    "MasterSlave": {"type": "int", "min": 0, "max": 9, "step": 1, "default": 0, "tag": "Maître/Esclave", "scope": "PRS",
+    "MasterSlave": {"type": "int", "min": 0, "max": 9, "step": 1, "default": 0, "tag": "Maître/Esclave", "scope": "PRS-S",
         "helper": "<b>PRS-S uniquement, mode Synchro.</b> Rôle dans un cluster synchronisé LoRa. <b>0</b> = Maître ; <b>1 à 9</b> = Esclave numéroté. Un seul Maître par cluster ; les Esclaves doivent avoir des numéros uniques."},
 
     # ---- Horaires ----
@@ -227,11 +242,11 @@ FIELDS = {
         "helper": "<b>PRS uniquement.</b> Sur Passive Recorder Stéréo (2 micros), choisit le mode d'enregistrement. En <b>Stéréo</b>, le suffixe du fichier indique quel canal a déclenché : <code>_0_</code> = micro gauche, <code>_1_</code> = micro droit."},
     "MicrophoneType": {"type": "combo", "choices": ["SPU0410","ICS43730","FG23329"], "default": "ICS43730", "tag": "Modèle de microphone",
         "helper": "Modèle de microphone installé. Le défaut <b>ICS43730</b> couvre la plupart des cas chiroptéro. <b>SPU0410</b> et <b>FG23329</b> selon le matériel monté."},
-    "TopAudioFreq": {"type": "int", "min": 1, "max": 50, "step": 1, "default": 2, "tag": "Fréquence top synchro (kHz)", "scope": "PRS",
+    "TopAudioFreq": {"type": "int", "min": 1, "max": 50, "step": 1, "default": 2, "tag": "Fréquence top synchro (kHz)", "scope": "PRS-S",
         "helper": "<b>PRS-S Maître uniquement.</b> Fréquence du « top synchro » émis par le Maître aux Esclaves, enregistré dans chaque WAV pour permettre la synchronisation temporelle en post-traitement. <b>Défaut : 2 kHz.</b>"},
-    "TopDuration": {"type": "combo", "choices": ["256","512","1024"], "choice_labels": ["256 éch.","512 éch.","1024 éch."], "default": "256", "tag": "Durée du top", "scope": "PRS",
+    "TopDuration": {"type": "combo", "choices": ["256","512","1024"], "choice_labels": ["256 éch.","512 éch.","1024 éch."], "default": "256", "tag": "Durée du top", "scope": "PRS-S",
         "helper": "<b>PRS-S Maître uniquement.</b> Durée du top audio en nombre d'échantillons. 256, 512 ou 1024."},
-    "TopPeriod": {"type": "int", "min": 0, "max": 10, "step": 1, "default": 0, "tag": "Période du top", "scope": "PRS",
+    "TopPeriod": {"type": "int", "min": 0, "max": 10, "step": 1, "default": 0, "tag": "Période du top", "scope": "PRS-S",
         "helper": "<b>PRS-S Maître uniquement.</b> <b>0</b> = top envoyé une seule fois au début de l'enregistrement. <b>≥ 1</b> = tops émis périodiquement pendant l'enregistrement."},
 
     # ---- Hétérodyne ----
@@ -277,7 +292,7 @@ FIELDS = {
     # ---- Fichiers ----
     "WavPrefix": {"type": "text", "limit": 5, "tag": "Préfixe fichier",
         "helper": "Préfixe des noms de fichiers WAV (<b>5 caractères max</b>). Complété ensuite par le firmware avec n° de série, date, heure. <b>Défaut : PaRec.</b><br><br>Astuce multi-sites : coder le site dans le préfixe (<code>SITE1</code>, <code>GROT2</code>) pour identifier la provenance sans ouvrir les métadonnées."},
-    "LEDSynchro": {"type": "combo", "choices": ["NO","REC","3 REC"], "choice_labels": ["Aucune", "À chaque enregistrement", "3 premiers enregistrements"], "default": "REC", "tag": "Affichage LED", "scope": "PRS",
+    "LEDSynchro": {"type": "combo", "choices": ["NO","REC","3 REC"], "choice_labels": ["Aucune", "À chaque enregistrement", "3 premiers enregistrements"], "default": "REC", "tag": "Affichage LED", "scope": "PRS-S",
         "helper": "<b>PRS-S Maître uniquement.</b> Allume ou non la LED du Teensy à chaque enregistrement pour vérifier visuellement la synchronisation. <b>3 premiers</b> = test discret (uniquement les 3 premiers enregistrements)."},
     "BatcorderMode": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Nommage Batcorder",
         "helper": "Change le nommage des fichiers pour ressembler à celui du <b>Batcorder ecoObs</b> (<code>DDMMYY-HHMMSS-NAMENUMBER-00001.wav</code>) et crée un <code>LOGFILE.txt</code> mémorisant la température. Utile si vous avez déjà un pipeline d'analyse Batcorder (BCAdmin, BCAnalyze). <b>Défaut : Non.</b>"},
@@ -446,7 +461,7 @@ SUBTITLES = {
     ("Profil", "OpMode"): "Mode de fonctionnement",
     ("Profil", "MasterSlave"): "Synchro multi-appareils (PRS-S)",
 
-    ("Horaires", "StartDate"): "Fenêtre calendaire (optionnelle)",
+    ("Horaires", "StartDate"): "Fenêtre calendaire",
     ("Horaires", "AutoStartStop"): "Déclenchement automatique basé sur le soleil",
 
     ("Audio", "NumericGain"): "Gain et dynamique du signal",
@@ -461,7 +476,7 @@ SUBTITLES = {
     ("Fichiers", "LEDSynchro"): "Indication LED (synchro PRS-S)",
 
     ("Fréquences", "MinFreqA"): "Spectre audible",
-    ("Fréquences", "MinDuration"): "Durée des événements",
+    ("Fréquences", "MinDuration"): "Durée des enregistrements",
     ("Fréquences", "ThresholdType"): "Seuils de détection",
 
     ("Autre", "TemperaturePeriod"): "Capteurs",

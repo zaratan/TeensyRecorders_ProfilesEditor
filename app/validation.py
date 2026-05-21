@@ -79,7 +79,7 @@ def validate_and_normalize(key: str, raw: str) -> tuple[str | None, str | None]:
         except (ValueError, TypeError):
             return None, "valeur numérique attendue"
         if not (meta["min"] <= val_int <= meta["max"]):
-            return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
+            return None, f"hors bornes (attendu {meta['min']:g}–{meta['max']:g})"
         return str(val_int), None
 
     if kind == "float":
@@ -91,7 +91,7 @@ def validate_and_normalize(key: str, raw: str) -> tuple[str | None, str | None]:
         except (ValueError, TypeError):
             return None, "valeur numérique attendue"
         if not (meta["min"] <= val_f <= meta["max"]):
-            return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
+            return None, f"hors bornes (attendu {meta['min']:g}–{meta['max']:g})"
         step = meta.get("step")
         if step:
             # Lat/Lon kept at 6 decimals (~ 0.1 m at the equator); other
@@ -200,8 +200,8 @@ def validate_master_slave_collision(
             masters.append(pid)
     if len(masters) <= 1:
         return []
-    msg = (
-        f"plusieurs profils Synchro avec Maître (0) dans le cluster — "
-        f"profils en conflit : {', '.join(masters)}"
-    )
+    # Short per-profile message — each colliding profile gets its widget
+    # highlighted, and the dialog's per-profile grouping repeats the
+    # phrase. Keep it terse so the duplication doesn't grate.
+    msg = f"doublon de Maître dans le cluster (profils {', '.join(masters)})"
     return [(pid, "MasterSlave", msg) for pid in masters]

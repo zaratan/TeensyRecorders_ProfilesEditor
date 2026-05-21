@@ -235,18 +235,29 @@ def test_enabled_hardware_scope() -> None:
     # On PR, AR-scoped fields must be disabled.
     m = compute_enabled_map(OpMode.AUTO_RECORD, "384", "0", Device.PR)
     _assert(m["HeterodyneMode"] is False, "HeterodyneMode (AR scope) must be off on PR")
-    _assert(m["MasterSlave"] is False, "MasterSlave (PRS scope) must be off on PR")
+    _assert(m["MasterSlave"] is False, "MasterSlave (PRS-S scope) must be off on PR")
+    _assert(m["StereoMode"] is False, "StereoMode (PRS scope) must be off on PR")
     _assert(m["MinFreqUS"] is True, "MinFreqUS has no scope, enabled by default")
 
     # On AR, AR-scoped fields are gated by OpMode (HeterodyneMode needs Heter).
     m = compute_enabled_map(OpMode.HETERODYNE, "384", "0", Device.AR)
     _assert(m["HeterodyneMode"] is True, "HeterodyneMode active on AR + Heter")
-    _assert(m["MasterSlave"] is False, "MasterSlave still off on AR (PRS scope)")
+    _assert(m["MasterSlave"] is False, "MasterSlave still off on AR (PRS-S scope)")
 
-    # On PRS-S, PRS-scoped + Synchro mode = MasterSlave active.
+    # On PRS (non-S), PRS-scoped active but PRS-S-scoped (MasterSlave, Top*,
+    # LEDSynchro) must stay disabled — the cluster features need the -S.
+    m = compute_enabled_map(OpMode.AUTO_RECORD, "384", "0", Device.PRS)
+    _assert(m["StereoMode"] is True, "StereoMode (PRS scope) active on PRS")
+    _assert(m["MasterSlave"] is False, "MasterSlave (PRS-S scope) off on PRS-without-S")
+    _assert(m["TopAudioFreq"] is False, "TopAudioFreq (PRS-S scope) off on PRS-without-S")
+    _assert(m["LEDSynchro"] is False, "LEDSynchro (PRS-S scope) off on PRS-without-S")
+
+    # On PRS-S, PRS-S-scoped + Synchro mode = MasterSlave active.
     m = compute_enabled_map(OpMode.SYNCHRO, "384", "0", Device.PRS_S)
     _assert(m["MasterSlave"] is True, "MasterSlave active on PRS-S + Synchro")
-    print("  ✓ compute_enabled_map: hardware scope")
+    _assert(m["TopAudioFreq"] is True, "TopAudioFreq active on PRS-S + Synchro")
+    _assert(m["StereoMode"] is True, "StereoMode active on PRS-S (PRS-family scope)")
+    print("  ✓ compute_enabled_map: hardware scope (incl. PRS vs PRS-S split)")
 
 
 def test_enabled_sampfreq_branch() -> None:
