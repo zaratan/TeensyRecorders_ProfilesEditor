@@ -14,6 +14,7 @@ Quote style and line order are preserved from the template — never from the
 user input. User-added comments and unknown keys are dropped on save.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -69,6 +70,30 @@ def save_lines(lines: list[str], path: Path) -> None:
         f.writelines(lines)
 
 
+# --- Schema version sniff ----------------------------------------------------
+
+_SCHEMA_VERSION_RE = re.compile(
+    r"^\s*;\s*Teensy Recorder profiles file, version\s+([0-9]+\.[0-9]+)",
+    re.IGNORECASE,
+)
+
+
+def parse_schema_version(lines: list[str]) -> str | None:
+    """Extract the firmware schema version from the file header.
+
+    The firmware writes (and the embedded template carries) a comment
+    like ``; Teensy Recorder profiles file, version 0.8`` as the first
+    non-empty line. Returns the dotted version string ("0.8") or None
+    if the marker is absent — older files predate the marker, in which
+    case the caller should treat them as "unknown but tolerable".
+    """
+    for line in lines[:5]:  # look only at the head — bail fast on long files
+        match = _SCHEMA_VERSION_RE.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
 # --- Parsing -----------------------------------------------------------------
 
 def parse_ini(lines: list[str]) -> dict[str, dict[str, str]]:
@@ -99,15 +124,6 @@ def parse_ini(lines: list[str]) -> dict[str, dict[str, str]]:
         key = LEGACY_ALIASES.get(key, key)
         parsed[current][key] = value
     return parsed
-
-
-# --- Backward-compat helper (used by current ui_editor.save_profile until the
-# template-injection path is wired in). Kept short on purpose — new code should
-# call parse_ini() and render_from_template() instead.
-
-def get_value(lines: list[str], section: str, key: str, default: str = "") -> str:
-    parsed = parse_ini(lines)
-    return parsed.get(section, {}).get(key, default)
 
 
 # --- Schema-diff helpers (used by the UI banner on load) ---------------------
@@ -206,9 +222,3 @@ def save_with_template(
     template = load_template_lines()
     rendered = render_from_template(template, overrides)
     save_lines(rendered, out_path)
-
-
-# --- Deprecated alias (kept until ui_editor is fully migrated) ---------------
-
-load_profiles = load_lines
-save_profiles = save_lines

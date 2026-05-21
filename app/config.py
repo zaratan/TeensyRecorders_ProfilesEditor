@@ -11,6 +11,65 @@ except ImportError:
         BUILD_VERSION = "0.0.0+unknown"
 
 
+# --- Single source of truth for stable string identifiers --------------------
+#
+# These three classes consolidate the magic strings that used to live as
+# literals scattered across ui_editor.py (OpMode names, device tokens,
+# accent colours). Using class attributes — rather than enum or constants
+# module — keeps lookups syntactically light (``OpMode.SYNCHRO``) and means
+# they round-trip through ``FIELDS["OpMode"]["choices"]`` as plain strings.
+#
+# Renaming an OpMode (e.g. firmware bump renames "Heterodyne" to "HeterMode")
+# now means touching ONE place; the test_schema_sync guard asserts that every
+# OpMode.* and Device.* value is referenced by FIELDS so a typo here breaks
+# the test instead of silently breaking a greying rule.
+
+
+class OpMode:
+    """Operating modes recognised by the firmware (``sOMValues[]`` in
+    ``Const.h``). Values are the exact strings written to the INI file."""
+    AUTO_RECORD = "Auto record"
+    FIXED_PROTO = "Fixed P. Proto."
+    RHINOLOGGER = "RhinoLogger"
+    HETERODYNE = "Heterodyne"
+    TIMED = "Timed recording"
+    AUDIO_REC = "Audio Rec."
+    SYNCHRO = "Synchro"
+
+
+class Device:
+    """Hardware variants exposed in the top-bar device selector. Mirrors the
+    scope tokens in ``SCOPE_BADGES`` for the AR/PRS variants; ``PR`` is the
+    baseline (no scope badge, all fields enabled by default)."""
+    PR = "PR"
+    AR = "AR"
+    PRS = "PRS"
+    PRS_S = "PRS-S"
+
+
+class AppColors:
+    """App-wide accent colours. Local hover/pressed shades and the dark-
+    popup palette stay inline near their widget — these are the values
+    that recurred in multiple stylesheets and benefit from a single name."""
+    PRIMARY = "#2b78ff"                   # Save button bg, helper popup bg, combo selection, hover accent
+    PRIMARY_HOVER = "#1a5fd0"             # Save button hover
+    PRIMARY_PRESSED = "#144aa0"           # Save button pressed
+    ERROR = "#e74c3c"                     # Validation error border + tooltip
+    DRIFT_BANNER_BG = "#2b4d7a"           # Blue drift banner
+    DRIFT_BANNER_BORDER = "#9bb5d6"       # Drift banner detail-button border (AA-passing)
+    DRIFT_BANNER_HOVER = "#3a6094"        # Drift banner detail-button hover
+    ONBOARDING_BANNER_BG = "#5a3a7a"      # Violet first-launch banner
+    SCHEMA_MISMATCH_BG = "#a05a1a"        # Amber banner for firmware schema version mismatch (stronger signal than drift)
+
+
+# Firmware schema version this build is aligned with. The embedded template
+# at ``initial_profile/Profiles.ini`` carries the same version in its first
+# comment line. Loaded user files that declare a different version trigger
+# the schema-mismatch banner so the user knows the firmware on their device
+# may not match what this editor expects.
+FIRMWARE_SCHEMA_VERSION = "0.8"
+
+
 # Scope badges shown next to fields specific to a hardware variant or a
 # particular operating mode. Rendered as 16-px coloured chips by
 # ui_editor.make_label_with_helper. Each field in FIELDS may carry an
@@ -47,6 +106,30 @@ SCOPE_BADGES = {
 # highlight defaults and key values, <br><br> for paragraph breaks. Source
 # of truth for field guidance: PassiveRecorder/GuideParametres-Alphabetique.md
 # and GuideParametres-ParContexte.md upstream.
+#
+# Declarative-attribute boundary (read this before adding new attrs)
+# ─────────────────────────────────────────────────────────────────
+# Attributes on a FIELD are good when they describe a property local to
+# that field — `type`, `min/max/step`, `choices/choice_labels`, `tag`,
+# `helper`, `limit`, `scope`, `unit_factor`. Each one has a single,
+# unambiguous interpretation that doesn't depend on other fields.
+#
+# Attributes that would describe *cross-field* behaviour (e.g. a
+# hypothetical `visible_when` saying "only show this field when OpMode
+# is X and SampFreqU >= Y") do NOT belong here. We considered such an
+# attribute, and rejected it: encoding boolean expressions in a dict
+# means inventing a mini-DSL, then writing its interpreter, then writing
+# its linter / typechecker / test framework. That's the inner-platform
+# anti-pattern.
+#
+# Cross-field visibility belongs in ``app/visibility.py`` as a list of
+# (predicate, fields_to_disable) tuples — predicates being plain Python
+# lambdas reading a context dict. That keeps the abstraction at the
+# level the problem actually has (non-local Boolean logic), and the
+# rules stay trivially testable from pure Python.
+#
+# Rule of thumb: if a new attribute would need an interpreter to read,
+# move it to ``visibility.py`` (or another impl module) instead.
 FIELDS = {
     # ---- Profil ----
     "ProfileName": {"type": "text", "limit": 11, "tag": "Nom de profil",
@@ -57,10 +140,10 @@ FIELDS = {
     # a profile is silently ineffective. Both Vigie-Chiro session protocols are
     # activated manually from the device menu, per recording session.
     "OpMode": {"type": "combo", "choices": [
-        "Auto record",
-        "Fixed P. Proto.","RhinoLogger","Heterodyne",
-        "Timed recording","Audio Rec.","Synchro"
-    ], "default": "Auto record", "tag": "Mode d'enregistrement",
+        OpMode.AUTO_RECORD,
+        OpMode.FIXED_PROTO, OpMode.RHINOLOGGER, OpMode.HETERODYNE,
+        OpMode.TIMED, OpMode.AUDIO_REC, OpMode.SYNCHRO,
+    ], "default": OpMode.AUTO_RECORD, "tag": "Mode d'enregistrement",
         "helper": "Mode de fonctionnement principal au démarrage.<br><br>"
                   "• <b>Auto record</b> : enregistrement automatique sur détection acoustique.<br>"
                   "• <b>Fixed P. Proto.</b> : protocole Point Fixe Vigie-Chiro, paramètres imposés par le firmware.<br>"
@@ -113,8 +196,12 @@ FIELDS = {
                   "• <b>250 kHz</b> : RhinoLogger long terme (CPU 48 MHz, autonomie ×2).<br>"
                   "• <b>500 kHz</b> : marge espèces exotiques.<br>"
                   "• <b>≤ 192 kHz</b> : rate les Rhinolophes."},
-    "SampFreqA": {"type": "combo", "choices": ["24","48","96","192"], "choice_labels": ["24 kHz","48 kHz","96 kHz","192 kHz"], "default": "48", "tag": "Fréquence audio",
-        "helper": "Fréquence d'échantillonnage en mode <b>Audio Rec.</b> (oiseaux, batraciens, bioacoustique non-ultrasonore). <b>48 kHz</b> standard. 96 kHz pour signaux haute fréquence."},
+    # SampFreqA caps at 96 kHz: the firmware silently coerces any value
+    # ≥ 192 kHz to 48 kHz (CModeGeneric.cpp:826-827, `if uiFeA >= FE192KHZ →
+    # FE48KHZ`). Exposing 192 kHz here would mean offering a value the
+    # firmware refuses to honour — silently corrupting the user's profile.
+    "SampFreqA": {"type": "combo", "choices": ["24","48","96"], "choice_labels": ["24 kHz","48 kHz","96 kHz"], "default": "48", "tag": "Fréquence audio",
+        "helper": "Fréquence d'échantillonnage en mode <b>Audio Rec.</b> (oiseaux, batraciens, bioacoustique non-ultrasonore). <b>48 kHz</b> standard. 96 kHz pour signaux haute fréquence (max accepté par le firmware en audio)."},
     "NumericGain": {"type": "combo", "choices": ["0","6","12","18","24"], "choice_labels": ["0 dB","+6 dB","+12 dB","+18 dB","+24 dB"], "default": "12", "tag": "Gain numérique",
         "helper": "Multiplie le signal numérique <b>après détection</b>, avant écriture WAV (×1 / ×2 / ×4 / ×8 / ×16). Ne change pas la sensibilité de déclenchement.<br><br>"
                   "• <b>0 dB</b> : préserve la dynamique, recommandé pour Tadarida, SonoChiro.<br>"

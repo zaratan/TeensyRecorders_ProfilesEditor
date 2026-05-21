@@ -1,7 +1,6 @@
-import re
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QFormLayout, QTabWidget, QTabBar, QFrame, QApplication, QScrollArea, QSizePolicy, QDialog, QToolButton
-from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
+from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator
 from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths, QSettings, QSignalBlocker
 
 from .ini_utils import (
@@ -10,9 +9,23 @@ from .ini_utils import (
     load_lines,
     load_template_lines,
     parse_ini,
+    parse_schema_version,
     save_with_template,
 )
-from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES, SCOPE_BADGES
+from .config import (
+    FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES,
+    SCOPE_BADGES, OpMode, Device, AppColors, FIRMWARE_SCHEMA_VERSION,
+)
+from . import banners, validation, visibility
+
+# Field keys whose values are needed for cross-field validation. Materialised
+# from FIELDS' min/max relations + Nyquist; kept as a module constant so the
+# per-profile validation loop reads only the keys it actually uses (saving
+# 48 dict lookups per profile).
+_CROSS_FIELD_KEYS = (
+    "MinFreqUS", "MaxFreqUS", "MinFreqA", "MaxFreqA",
+    "MinDuration", "MaxDuration", "SampFreqU",
+)
 
 
 def _theme_colors() -> dict[str, str]:
@@ -56,17 +69,17 @@ class HelperPopup(QFrame):
         super().__init__(None, Qt.ToolTip)
         self._source = source
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #2b78ff;
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {AppColors.PRIMARY};
                 border-radius: 6px;
-            }
-            QLabel {
+            }}
+            QLabel {{
                 color: white;
                 padding: 8px 12px;
                 font-size: 12px;
                 line-height: 145%;
-            }
+            }}
         """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -236,7 +249,7 @@ class ProfileEditor(QWidget):
                 border: none;
             }}
             QComboBox QAbstractItemView::item:selected {{
-                background-color: #2b78ff;
+                background-color: {AppColors.PRIMARY};
                 color: white;
             }}
             HelperLabel {{
@@ -249,8 +262,8 @@ class ProfileEditor(QWidget):
             }}
             HelperLabel:hover {{
                 color: white;
-                background-color: #2b78ff;
-                border: 1px solid #2b78ff;
+                background-color: {AppColors.PRIMARY};
+                border: 1px solid {AppColors.PRIMARY};
             }}
         """)
 
@@ -275,6 +288,8 @@ class ProfileEditor(QWidget):
         # skipped on rebuild, so reopening a file with the same drift profile
         # doesn't keep nagging the user.
         self._dismissed_drift_signatures: set[tuple] = set()
+        self.schema_banner: QFrame | None = None
+        self.file_schema_version: str | None = None
         # Parse the user file once at load. user_parsed is the authoritative
         # snapshot of disk values; widget edits land in self.cache and override
         # user_parsed at save time.
@@ -305,8 +320,8 @@ class ProfileEditor(QWidget):
             }}
             QToolButton:hover {{
                 color: white;
-                background-color: #2b78ff;
-                border: 1px solid #2b78ff;
+                background-color: {AppColors.PRIMARY};
+                border: 1px solid {AppColors.PRIMARY};
             }}
         """)
         about_btn.clicked.connect(self.show_about)
@@ -344,14 +359,14 @@ class ProfileEditor(QWidget):
         # every launch.
         profile_layout.addWidget(QLabel("Type d'appareil :"))
         self.device_combo = QComboBox()
-        # userData carries the scope token used by _compute_enabled_map
-        # (matches SCOPE_BADGES keys for AR/PRS, plus the bare "PR" baseline).
-        self.device_combo.addItem("Passive Recorder (PR)", "PR")
-        self.device_combo.addItem("Active Recorder (AR)", "AR")
-        self.device_combo.addItem("Passive Stéréo (PRS)", "PRS")
-        self.device_combo.addItem("Passive Stéréo Synchro (PRS-S)", "PRS-S")
+        # userData carries the device token used by _compute_enabled_map
+        # (matches SCOPE_BADGES keys for AR/PRS, plus the bare PR baseline).
+        self.device_combo.addItem("Passive Recorder (PR)", Device.PR)
+        self.device_combo.addItem("Active Recorder (AR)", Device.AR)
+        self.device_combo.addItem("Passive Stéréo (PRS)", Device.PRS)
+        self.device_combo.addItem("Passive Stéréo Synchro (PRS-S)", Device.PRS_S)
         self.device_combo.setCursor(Qt.PointingHandCursor)
-        saved_device = QSettings().value("device_type", "PR")
+        saved_device = QSettings().value("device_type", Device.PR)
         idx = self.device_combo.findData(saved_device)
         if idx >= 0:
             self.device_combo.setCurrentIndex(idx)
@@ -369,6 +384,14 @@ class ProfileEditor(QWidget):
         self.onboarding_banner_slot.setContentsMargins(0, 8, 0, 0)
         layout.addLayout(self.onboarding_banner_slot)
         self._refresh_onboarding_banner()
+
+        # Schema-mismatch banner slot (amber): louder than the blue drift
+        # banner because a firmware version mismatch can corrupt fields the
+        # drift detector wouldn't catch.
+        self.schema_banner_slot = QVBoxLayout()
+        self.schema_banner_slot.setContentsMargins(0, 8, 0, 0)
+        layout.addLayout(self.schema_banner_slot)
+        self._refresh_schema_banner()
 
         # Schema-drift banner slot: an empty layout that hosts the (re)built
         # banner. Keeping it as a dedicated slot lets us swap the banner on
@@ -406,11 +429,11 @@ class ProfileEditor(QWidget):
         # Primary action style — distinguishes Save from the secondary
         # "Choisir dossier sortie" button above it.
         save_btn.setStyleSheet(
-            "QPushButton { background-color: #2b78ff; color: white; "
+            f"QPushButton {{ background-color: {AppColors.PRIMARY}; color: white; "
             "padding: 8px 20px; font-weight: 600; border: none; "
             "border-radius: 4px; }"
-            "QPushButton:hover { background-color: #1a5fd0; }"
-            "QPushButton:pressed { background-color: #144aa0; }"
+            f"QPushButton:hover {{ background-color: {AppColors.PRIMARY_HOVER}; }}"
+            f"QPushButton:pressed {{ background-color: {AppColors.PRIMARY_PRESSED}; }}"
         )
         save_btn.clicked.connect(self.save_profile)
         save_layout.addWidget(save_btn)
@@ -440,11 +463,14 @@ class ProfileEditor(QWidget):
         self.source_path_label.setToolTip(resolved)
 
     def _parse_user_file(self) -> None:
-        """Re-read self.ini_path from disk and refresh drift detection."""
+        """Re-read self.ini_path from disk and refresh drift / schema-version detection."""
         self.lines = load_lines(self.ini_path)
         self.user_parsed = parse_ini(self.lines)
         self.missing_keys = detect_missing_keys(self.user_parsed, self.template_parsed)
         self.dropped_keys = detect_dropped_keys(self.user_parsed, self.template_parsed)
+        # Stash the declared firmware schema version for the mismatch banner.
+        # None = the file predates the marker (older firmware exports).
+        self.file_schema_version = parse_schema_version(self.lines)
 
     def open_ini_file(self) -> None:
         """User-triggered: load a different Profiles.ini, reset cache, rebuild form."""
@@ -483,138 +509,74 @@ class ProfileEditor(QWidget):
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
         self._set_source_path_label(self.ini_path)
         self._refresh_onboarding_banner()
+        self._refresh_schema_banner()
         self._refresh_drift_banner()
         self.build_form()
 
+    def _refresh_schema_banner(self) -> None:
+        """Show the amber schema-mismatch banner when the loaded file's
+        declared firmware version differs from the one this build targets.
+        Embedded template self-loads at the matching version, so the slot
+        is empty for the default profile."""
+        if self.schema_banner is not None:
+            self.schema_banner_slot.removeWidget(self.schema_banner)
+            self.schema_banner.deleteLater()
+            self.schema_banner = None
+        # Match → nothing to show. Mismatch (or missing marker, which is a
+        # softer "we don't know what you have") → banner.
+        if self.file_schema_version == FIRMWARE_SCHEMA_VERSION:
+            return
+        banner = banners.build_schema_mismatch_banner(
+            self.file_schema_version, FIRMWARE_SCHEMA_VERSION,
+        )
+        self.schema_banner_slot.addWidget(banner)
+        self.schema_banner = banner
+
     def _refresh_onboarding_banner(self) -> None:
-        """First-launch banner that surfaces the two entry paths: open an
-        existing Profiles.ini, or create a new one from the firmware defaults.
-        The wording does not call this state a "demo" — a user opening the
-        app to compose a brand-new file from scratch is a fully valid usage,
-        not a placeholder mode. Hidden as soon as ``has_opened_file`` is
-        True in QSettings (set by open_ini_file or save_profile)."""
+        """Show the violet onboarding banner unless ``has_opened_file`` is
+        set in QSettings. Builder lives in ``app/banners.py``."""
         if self.onboarding_banner is not None:
             self.onboarding_banner_slot.removeWidget(self.onboarding_banner)
             self.onboarding_banner.deleteLater()
             self.onboarding_banner = None
-
         if QSettings().value("has_opened_file", False, type=bool):
             return
-
-        banner = QFrame()
-        banner.setStyleSheet(
-            "QFrame { background-color: #5a3a7a; border-radius: 4px; }"
-            "QLabel { color: white; }"
-        )
-        bl = QHBoxLayout(banner)
-        bl.setContentsMargins(10, 6, 6, 6)
-        bl.setSpacing(8)
-        msg = QLabel(
-            "Aucun fichier ouvert — vous travaillez sur les valeurs par défaut firmware. "
-            "Cliquez sur <b>Ouvrir un fichier…</b> pour modifier un <code>Profiles.ini</code> "
-            "existant, ou éditez et <b>Sauvegardez</b> pour en créer un nouveau."
-        )
-        msg.setTextFormat(Qt.RichText)
-        msg.setWordWrap(True)
-        bl.addWidget(msg, stretch=1)
+        banner = banners.build_onboarding_banner()
         self.onboarding_banner_slot.addWidget(banner)
         self.onboarding_banner = banner
 
     def _refresh_drift_banner(self) -> None:
-        """Tear down the previous banner (if any) and rebuild it from the
-        current missing/dropped state. Hides itself when there's nothing to
-        report, or when the user has already dismissed this exact signature
-        in the session.
-        """
+        """Rebuild the drift banner from current missing/dropped state.
+        Skips when there's nothing to report, or when the user has already
+        dismissed this exact signature in the session. Builder lives in
+        ``app/banners.py``."""
         if self.drift_banner is not None:
             self.drift_banner_slot.removeWidget(self.drift_banner)
             self.drift_banner.deleteLater()
             self.drift_banner = None
-
         if not self.missing_keys and not self.dropped_keys:
             return
-
-        # Signature = the set of missing/dropped keys. A user who dismissed
-        # banner X and later opens a different file with the same X drift
-        # shouldn't see the banner again — they already acknowledged it.
         signature = (
             tuple(sorted(self.missing_keys)),
             tuple(sorted(self.dropped_keys)),
         )
         if signature in self._dismissed_drift_signatures:
             return
-
-        n_missing = len(self.missing_keys)
-        n_dropped = len(self.dropped_keys)
-        parts: list[str] = []
-        if n_missing:
-            parts.append(
-                f"{n_missing} paramètre{'s' if n_missing > 1 else ''} "
-                f"initialisé{'s' if n_missing > 1 else ''} aux valeurs par défaut firmware"
-            )
-        if n_dropped:
-            parts.append(
-                f"{n_dropped} paramètre{'s' if n_dropped > 1 else ''} obsolète"
-                f"{'s' if n_dropped > 1 else ''} retiré{'s' if n_dropped > 1 else ''} à la sauvegarde"
-            )
-        summary = " — ".join(parts) + "."
-
-        banner = QFrame()
-        banner.setStyleSheet(
-            "QFrame { background-color: #2b4d7a; border-radius: 4px; }"
-            "QLabel { color: white; }"
+        banner = banners.build_drift_banner(
+            self.missing_keys,
+            self.dropped_keys,
+            signature,
+            on_details=self._show_drift_details,
+            on_dismiss=self._dismissed_drift_signatures.add,
         )
-        bl = QHBoxLayout(banner)
-        bl.setContentsMargins(10, 6, 6, 6)
-        bl.setSpacing(8)
-
-        msg = QLabel(summary)
-        msg.setWordWrap(True)
-        bl.addWidget(msg, stretch=1)
-
-        details_btn = QPushButton("Voir détails")
-        details_btn.setCursor(Qt.PointingHandCursor)
-        details_btn.setStyleSheet(
-            "QPushButton { color: white; background: transparent; "
-            "border: 1px solid #9bb5d6; border-radius: 3px; padding: 2px 8px; }"
-            "QPushButton:hover { background-color: #3a6094; }"
-        )
-        details_btn.clicked.connect(self._show_drift_details)
-        bl.addWidget(details_btn)
-
-        dismiss_btn = QToolButton()
-        dismiss_btn.setText("×")
-        dismiss_btn.setToolTip("Masquer (cette session)")
-        dismiss_btn.setCursor(Qt.PointingHandCursor)
-        dismiss_btn.setStyleSheet(
-            "QToolButton { color: white; background: transparent; border: none; "
-            "font-weight: bold; padding: 2px 6px; }"
-            "QToolButton:hover { color: #ffd; }"
-        )
-
-        def _on_dismiss():
-            self._dismissed_drift_signatures.add(signature)
-            banner.hide()
-
-        dismiss_btn.clicked.connect(_on_dismiss)
-        bl.addWidget(dismiss_btn)
-
         self.drift_banner_slot.addWidget(banner)
         self.drift_banner = banner
 
     def _show_drift_details(self) -> None:
-        lines: list[str] = []
-        if self.missing_keys:
-            lines.append("Initialisés aux valeurs par défaut firmware :")
-            for section, key in self.missing_keys:
-                lines.append(f"  • [{section}] {key}")
-            lines.append("")
-        if self.dropped_keys:
-            lines.append("Inconnus du firmware actuel, retirés à la sauvegarde :")
-            for section, key in self.dropped_keys:
-                lines.append(f"  • [{section}] {key}")
         QMessageBox.information(
-            self, "Différences avec le schéma firmware", "\n".join(lines)
+            self,
+            "Différences avec le schéma firmware",
+            banners.format_drift_details(self.missing_keys, self.dropped_keys),
         )
 
     @staticmethod
@@ -958,15 +920,11 @@ class ProfileEditor(QWidget):
             return val
 
     def _compute_enabled_map(self, pid: str | None = None) -> dict[str, bool]:
-        """Decide which fields are active given the OpMode / SampFreqU /
-        ThresholdType / device type *of the profile identified by pid*.
-        ``pid=None`` (the default) targets the currently-displayed profile
-        and reads from widgets, which is what reactive UI paths
-        (apply_conditional_visibility) want. ``pid="3"`` targets Profile_3
-        and reads from cache/disk — used by save-time per-profile
-        validation. Fields not mentioned default to enabled.
+        """Thin wrapper over ``visibility.compute_enabled_map``. Sources the
+        four controllers (OpMode / SampFreqU / ThresholdType / device) from
+        widgets when ``pid`` targets the displayed profile, from cache
+        otherwise. The pure engine lives in ``app/visibility.py``.
         """
-        enabled: dict[str, bool] = {k: True for k in FIELDS}
         if pid is None or pid == self.profile_id:
             op_mode = self._current_value("OpMode")
             samp_us = self._current_value("SampFreqU")
@@ -975,77 +933,8 @@ class ProfileEditor(QWidget):
             op_mode = self._read_profile_value(pid, "OpMode")
             samp_us = self._read_profile_value(pid, "SampFreqU")
             threshold_type = self._read_profile_value(pid, "ThresholdType")
-        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
-
-        # --- Hardware-scoped fields. Grey out anything that doesn't apply to
-        # the selected device variant. PRS-scoped fields (Stereo/Top/LED/
-        # MasterSlave) are active for both PRS and PRS-S; AR-scoped fields
-        # (Heterodyne …) only for AR. RhinoLogger scope is a mode flag, not a
-        # hardware flag — left untouched here.
-        ar_active = (device_type == "AR")
-        prs_active = (device_type in ("PRS", "PRS-S"))
-        for k, meta in FIELDS.items():
-            scope = meta.get("scope")
-            if scope == "AR" and not ar_active:
-                enabled[k] = False
-            elif scope == "PRS" and not prs_active:
-                enabled[k] = False
-
-        # --- OpMode-driven rules
-        if op_mode != "Timed recording":
-            for k in ("RecTime", "WaitTime"):
-                enabled[k] = False
-        if op_mode != "RhinoLogger":
-            enabled["AffRLPerm"] = False
-        if op_mode != "Heterodyne":
-            for k in (
-                "HeterodyneMode", "AutoRecHeter", "RefreshGraphe", "HeterLevel",
-                "HeterWithGraph", "Pre-TriggerAuto", "Pre-TriggerHeter",
-                "Pre-HeterSelectiveFilter", "HeterAGC", "HeterAutoPlay",
-            ):
-                enabled[k] = False
-        if op_mode != "Synchro":
-            for k in ("MasterSlave", "TopAudioFreq", "TopDuration",
-                      "TopPeriod", "LEDSynchro"):
-                enabled[k] = False
-
-        # --- SampFreqU-driven rules. Ultrasound when SampFreq ≥ 192 kHz;
-        # audio band and the float-step HP filter take over below.
-        try:
-            sf_khz = int(samp_us)
-        except (ValueError, TypeError):
-            sf_khz = 384
-        if sf_khz >= 192:
-            for k in ("MinFreqA", "MaxFreqA", "fHighpassFilter"):
-                enabled[k] = False
-        else:
-            for k in ("MinFreqUS", "MaxFreqUS", "HighpassFilter"):
-                enabled[k] = False
-
-        # --- ThresholdType: relative (0) vs absolute (1)
-        if threshold_type == "0":
-            enabled["AbsoluteThreshold"] = False
-        elif threshold_type == "1":
-            enabled["RelativeThreshold"] = False
-
-        # --- Fixed P. Proto. (PROTFIXE) is the only Vigie-Chiro protocol
-        # persisted in a profile (Pédestre / Routier are coerced to
-        # RECAUTO/PHETER at every cold boot, so they aren't even offered in
-        # the OpMode combo). Point Fixe overrides 12 params at BeginMode
-        # (cf. CModeRecorder.cpp:1367-1384) — we grey them out so the user
-        # understands their profile values are ignored in that mode.
-        if op_mode == "Fixed P. Proto.":
-            for k in (
-                "SampFreqU", "LowpassFilter", "HighpassFilter", "fHighpassFilter",
-                "NumericGain", "Exp10",
-                "MinFreqUS", "MaxFreqUS",
-                "ThresholdType", "RelativeThreshold",
-                "NbDetect",
-                "MinDuration", "MaxDuration",
-            ):
-                enabled[k] = False
-
-        return enabled
+        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else Device.PR
+        return visibility.compute_enabled_map(op_mode, samp_us, threshold_type, device_type)
 
     def _refresh_opmode_combo_items(self) -> str | None:
         """Disable OpMode entries that the firmware would refuse for the
@@ -1056,21 +945,16 @@ class ProfileEditor(QWidget):
         Returns the name of the mode that was coerced away (so the caller
         can surface a notice), or None if no coercion happened.
         """
-        device = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
+        device = self.device_combo.currentData() if hasattr(self, "device_combo") else Device.PR
         opmode = self.inputs.get("OpMode")
         if not isinstance(opmode, QComboBox):
             return None
-        rules = {
-            "Heterodyne": device == "AR",
-            "Audio Rec.": device == "AR",
-            "Synchro": device == "PRS-S",
-        }
         model = opmode.model()
         for i in range(opmode.count()):
             choice_val = opmode.itemData(i)
             item = model.item(i)
             if item is not None:
-                item.setEnabled(rules.get(choice_val, True))
+                item.setEnabled(not visibility.opmode_disabled_for_device(choice_val, device))
         # If the currently-selected mode just became invalid, switch to
         # Auto record (the firmware would coerce to the same default).
         # Block signals on the fallback so we don't re-enter
@@ -1079,7 +963,7 @@ class ProfileEditor(QWidget):
         current_item = model.item(opmode.currentIndex())
         if current_item is not None and not current_item.isEnabled():
             coerced_from = opmode.currentData()
-            fallback = opmode.findData("Auto record")
+            fallback = opmode.findData(OpMode.AUTO_RECORD)
             if fallback >= 0:
                 with QSignalBlocker(opmode):
                     opmode.setCurrentIndex(fallback)
@@ -1148,134 +1032,20 @@ class ProfileEditor(QWidget):
             self.out_dir_label.setText(str(self.out_dir.resolve()))
 
     def _validate_and_normalize(self, key: str, raw: str) -> tuple[str | None, str | None]:
-        """Validate a single value against its FIELDS spec.
-
-        Returns (normalized_value, error_message). Exactly one of the two is
-        None: a valid value returns (str, None); an invalid value returns
-        (None, "humain message"). Caller decides how to surface the error
-        (border, MessageBox, etc.).
-        """
-        meta = FIELDS[key]
-        val = (raw or "").strip()
-        if meta["type"] == "text":
-            if key in ("ProfileName", "WavPrefix"):
-                if not val:
-                    return None, "champ requis"
-                limit = meta.get("limit")
-                if limit and len(val) > limit:
-                    return None, f"limité à {limit} caractères"
-                if re.search(r"[^A-Za-z0-9 _-]", val):
-                    return None, "contient des caractères interdits"
-                return val, None
-            if key in ("StartTime", "EndTime"):
-                if val and not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", val):
-                    return None, "format attendu HH:MM (ex: 08:30)"
-                return val, None
-            if key in ("StartDate", "EndDate"):
-                # Accept "--/--" (no limit) or "JJ/MM" (firmware tolerates
-                # impossible combos like 31/02; we don't over-validate).
-                if val and val != "--/--" and not re.match(
-                    r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val
-                ):
-                    return None, "format attendu JJ/MM ou --/--"
-                return val, None
-            return val, None
-
-        if meta["type"] == "int":
-            if not val:
-                return None, "champ requis"
-            try:
-                val_int = int(val)
-            except (ValueError, TypeError):
-                return None, "valeur numérique attendue"
-            if not (meta["min"] <= val_int <= meta["max"]):
-                return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
-            return str(val_int), None
-
-        if meta["type"] == "float":
-            if not val:
-                return None, "champ requis"
-            normalized = val.replace(",", ".")  # accept comma input
-            try:
-                val_f = float(normalized)
-            except (ValueError, TypeError):
-                return None, "valeur numérique attendue"
-            if not (meta["min"] <= val_f <= meta["max"]):
-                return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
-            step = meta.get("step")
-            if step:
-                decimals = 6 if key in ("Latitude", "Longitude") else 3
-                val_f = round(round((val_f - meta["min"]) / step) * step + meta["min"], decimals)
-            return str(val_f), None
-
-        # combo: stored as-is (the choice value was already extracted via userData)
-        return val, None
+        """Delegate to ``validation.validate_and_normalize`` (pure, Qt-free).
+        Kept as an instance method for call-site stability."""
+        return validation.validate_and_normalize(key, raw)
 
     def _validate_cross_field(self, enabled: dict[str, bool], pid: str | None = None) -> list[tuple[str, str]]:
-        """Return [(key, message), ...] for cross-field constraint violations
-        for the profile identified by pid (None = current displayed profile).
-        Skips checks involving greyed-out fields so the user isn't yelled at
-        about a mode they're not in."""
-
-        def read(k: str) -> str:
-            if pid is None or pid == self.profile_id:
-                return self._current_value(k)
-            return self._read_profile_value(pid, k)
-
-        def as_int(k: str) -> int | None:
-            try:
-                return int(read(k))
-            except (ValueError, TypeError):
-                return None
-
-        def as_float(k: str) -> float | None:
-            try:
-                return float(read(k).replace(",", "."))
-            except (ValueError, TypeError):
-                return None
-
-        errors: list[tuple[str, str]] = []
-
-        if enabled.get("MinFreqUS") and enabled.get("MaxFreqUS"):
-            lo, hi = as_float("MinFreqUS"), as_float("MaxFreqUS")
-            if lo is not None and hi is not None and lo >= hi:
-                errors.append(("MaxFreqUS", "doit être supérieure à la Fréquence ultrason min"))
-
-        if enabled.get("MinFreqA") and enabled.get("MaxFreqA"):
-            lo, hi = as_float("MinFreqA"), as_float("MaxFreqA")
-            if lo is not None and hi is not None and lo >= hi:
-                errors.append(("MaxFreqA", "doit être supérieure à la Fréquence audio min"))
-
-        lo_d, hi_d = as_int("MinDuration"), as_int("MaxDuration")
-        if lo_d is not None and hi_d is not None and lo_d > hi_d:
-            errors.append(("MaxDuration", "doit être supérieure ou égale à la Durée min"))
-
-        # Nyquist: max active frequency must be ≤ SampFreq / 2. SampFreqU is
-        # stored as a kHz integer string ("384"). Since the Min/Max Freq
-        # fields are now in UI kHz too, the comparison is unit-consistent:
-        # MaxFreqX_kHz ≤ SampFreqU_kHz / 2.
-        samp_us = read("SampFreqU")
-        try:
-            nyquist_khz = int(samp_us) / 2
-        except (ValueError, TypeError):
-            nyquist_khz = None
-        if nyquist_khz is not None:
-            if enabled.get("MaxFreqUS"):
-                hi = as_float("MaxFreqUS")
-                if hi is not None and hi > nyquist_khz:
-                    errors.append((
-                        "MaxFreqUS",
-                        f"dépasse la limite Nyquist ({nyquist_khz:g} kHz à {samp_us} kHz)",
-                    ))
-            if enabled.get("MaxFreqA"):
-                hi = as_float("MaxFreqA")
-                if hi is not None and hi > nyquist_khz:
-                    errors.append((
-                        "MaxFreqA",
-                        f"dépasse la limite Nyquist ({nyquist_khz:g} kHz à {samp_us} kHz)",
-                    ))
-
-        return errors
+        """Build the per-profile values dict and delegate to
+        ``validation.validate_cross_field``. The materialised dict only
+        carries the keys the cross-field engine actually reads.
+        """
+        if pid is None or pid == self.profile_id:
+            values = {k: self._current_value(k) for k in _CROSS_FIELD_KEYS}
+        else:
+            values = {k: self._read_profile_value(pid, k) for k in _CROSS_FIELD_KEYS}
+        return validation.validate_cross_field(values, enabled)
 
     def _set_field_error(self, key: str, has_error: bool, message: str | None = None) -> None:
         """Apply / remove a red border on a field. QLineEdit gets a clean
@@ -1290,8 +1060,8 @@ class ProfileEditor(QWidget):
             # 2 px border so the visual reads clearly on Retina; padding is
             # nudged to keep the field height stable.
             widget.setStyleSheet(
-                "QLineEdit { border: 2px solid #e74c3c; padding: 3px 7px; } "
-                "QComboBox { border: 2px solid #e74c3c; }"
+                f"QLineEdit {{ border: 2px solid {AppColors.ERROR}; padding: 3px 7px; }} "
+                f"QComboBox {{ border: 2px solid {AppColors.ERROR}; }}"
             )
             if message is not None:
                 widget.setToolTip(message)
@@ -1394,26 +1164,17 @@ class ProfileEditor(QWidget):
                 all_errors.append((pid, key, msg))
 
         # 3. Cluster-wide check (C7): on PRS-S in Synchro mode, the cluster
-        # needs exactly one Master (MasterSlave=0). Two Profile_N with
-        # MasterSlave=0 + OpMode=Synchro is a config bug — flag every
-        # colliding profile so the user knows which ones to renumber.
-        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
-        if device_type == "PRS-S":
-            masters: list[str] = []
-            for pid in PROFILE_LABELS.values():
-                if (
-                    self._read_profile_value(pid, "OpMode") == "Synchro"
-                    and self._read_profile_value(pid, "MasterSlave") == "0"
-                ):
-                    masters.append(pid)
-            if len(masters) > 1:
-                for pid in masters:
-                    all_errors.append((
-                        pid,
-                        "MasterSlave",
-                        f"plusieurs profils Synchro avec Maître (0) dans le cluster — "
-                        f"profils en conflit : {', '.join(masters)}",
-                    ))
+        # needs exactly one Master (MasterSlave=0). Delegated to
+        # ``validation.validate_master_slave_collision``.
+        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else Device.PR
+        profiles_values = {
+            pid: {
+                "OpMode": self._read_profile_value(pid, "OpMode"),
+                "MasterSlave": self._read_profile_value(pid, "MasterSlave"),
+            }
+            for pid in PROFILE_LABELS.values()
+        }
+        all_errors.extend(validation.validate_master_slave_collision(profiles_values, device_type))
 
         if all_errors:
             # If errors live on a profile that isn't currently shown, switch

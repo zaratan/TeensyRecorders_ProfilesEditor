@@ -22,8 +22,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.config import FIELDS, SCOPE_BADGES  # noqa: E402
+from app.config import FIELDS, SCOPE_BADGES, OpMode, Device  # noqa: E402
 from app.ini_utils import LEGACY_ALIASES, load_template_lines, parse_ini  # noqa: E402
+
+
+def _class_values(klass: type) -> list[str]:
+    """Public class attribute values (skip dunders, callables, classes)."""
+    return [
+        v for k, v in vars(klass).items()
+        if not k.startswith("_") and isinstance(v, str)
+    ]
 
 # Whitelist of attributes any FIELDS entry may carry. Typing a new optional
 # attribute (e.g. "choise_labels") triggers a fail here rather than a silent
@@ -70,7 +78,27 @@ def main() -> int:
                     f"Firmware will silently drop this value at read time."
                 )
 
-    # 4. FIELDS entries use only known attributes; choice_labels length matches.
+    # 4. Every OpMode constant must be a valid FIELDS["OpMode"] choice — guards
+    # against a typo in the constants class shadowing the actual firmware token.
+    opmode_choices = set(FIELDS["OpMode"]["choices"])
+    for value in _class_values(OpMode):
+        if value not in opmode_choices:
+            errors.append(
+                f"OpMode constant {value!r} is not in FIELDS['OpMode']['choices']"
+            )
+
+    # 5. Every Device constant must be a recognised device-combo token. The
+    # combo lives in ui_editor.py (Qt-dependent), so we only assert the token
+    # set is non-empty and contains the documented PR/AR/PRS/PRS-S quartet.
+    expected_devices = {"PR", "AR", "PRS", "PRS-S"}
+    device_values = set(_class_values(Device))
+    if device_values != expected_devices:
+        errors.append(
+            f"Device constants mismatch: got {sorted(device_values)}, "
+            f"expected {sorted(expected_devices)}"
+        )
+
+    # 6. FIELDS entries use only known attributes; choice_labels length matches.
     for key, meta in FIELDS.items():
         extras = set(meta.keys()) - ALLOWED_FIELD_ATTRS
         if extras:

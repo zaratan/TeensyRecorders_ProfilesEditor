@@ -4,6 +4,24 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+### Architecture (post-review S1-S8 + lead engineer round 2)
+- **`app/validation.py`** (nouveau, 207 LOC) — `validate_and_normalize`, `validate_cross_field`, `validate_master_slave_collision`. Pure functions, zéro Qt, testables sans `QApplication`. Extrait de `ui_editor.py`.
+- **`app/visibility.py`** (nouveau, 161 LOC) — `compute_enabled_map`, `opmode_disabled_for_device`, et `VISIBILITY_RULES` (liste déclarative `(predicate, fields_to_disable)` plutôt qu'un mini-DSL `visible_when`). Extrait de `ui_editor.py`.
+- **`app/banners.py`** (nouveau, 184 LOC) — `build_onboarding_banner`, `build_drift_banner`, `build_schema_mismatch_banner`, `format_drift_details`. Extrait de `ui_editor.py`.
+- **`app/firmware_contract.py`** (nouveau, 197 LOC) — snapshot hand-maintenu de toutes les contraintes `DecodeXxx` firmware (55 fields). 13 divergences volontaires documentées dans `ACCEPTED_DIVERGENCES` avec leur raison.
+- **Constantes `OpMode`/`Device`/`AppColors`** dans `config.py` — fin des 41 magic strings dispersées dans `ui_editor.py`. `FIELDS["OpMode"]["choices"]` référence les attributs `OpMode.*` (single source of truth).
+- **`FIRMWARE_SCHEMA_VERSION = "0.8"`** dans `config.py` + `parse_schema_version` dans `ini_utils.py` + banner amber (`SCHEMA_MISMATCH_BG`) qui surface une mismatch firmware-version au load.
+- **`ui_editor.py` : 1494 → 1255 LOC** (-239, -16 %) via les 3 extractions ci-dessus. La logique restante est essentiellement de la glue Qt (widget creation, signal wiring) qui ne se déplace pas naturellement.
+
+### Tests
+- **`tests/test_firmware_alignment.py`** (nouveau) — valide que les 55 entrées de `FIELDS` matchent `FIRMWARE_CONTRACT` modulo `unit_factor` et `ACCEPTED_DIVERGENCES`. Garde-fou contre toute future divergence app↔firmware.
+- **`tests/test_pure_modules.py`** (nouveau, 13 cas) — unit tests sans Qt pour `validation.py` et `visibility.py` : empty value, step snap, Nyquist, cluster master collision, scope hardware, Fixed-Proto override, opmode_disabled_for_device.
+- **`tests/test_schema_sync.py`** étendu : valide que toutes les constantes `OpMode.*` sont des choix valides de `FIELDS["OpMode"]`, et que `Device.*` couvre PR/AR/PRS/PRS-S.
+
+### Corrigé (post-review #2 lead engineer)
+- **`SampFreqA="192"` retiré du combo** (CRITIQUE) : le firmware refuse silencieusement toute valeur ≥ 192 kHz en audio et coerce à 48 kHz (`CModeGeneric.cpp:826-827`). Exposer 192 dans l'UI permettait à l'utilisateur de saisir une valeur que le firmware corromprait au prochain boot. Combo réduit à `["24","48","96"]` + helper mis à jour.
+- **Dead code supprimé** : `ini_utils.get_value` / `load_profiles` / `save_profiles` aliases (jamais référencés), import `QCursor` dans `ui_editor.py`. Flaggés deux rounds de review consécutifs.
+
 ### Changé
 - **Fréquences ultrasons/audio affichées en kHz** : les 4 champs `MinFreqUS`, `MaxFreqUS`, `MinFreqA`, `MaxFreqA` étaient saisis en Hz (100..150000) — peu naturel pour un public chiroptérologue qui raisonne en kHz. L'UI affiche désormais ces valeurs en kHz (précision 0,1 kHz) avec une plage de 0,1 à 150 kHz (US) ou 0,1 à 96 kHz (audio). La conversion bidirectionnelle (kHz UI ↔ Hz INI) est opérée par `_ui_to_ini` / `_ini_to_ui` au moment du save/load — le fichier `Profiles.ini` reste rigoureusement en Hz côté disque (contrat firmware `DecodeInt` ligne 2456+). Helpers, bornes de validation, et règle Nyquist (`MaxFreqX_kHz ≤ SampFreqU_kHz / 2`) mis à jour en cohérence.
 - **Banner premier lancement reformulée** : « Vous éditez actuellement le modèle de démonstration » → « Aucun fichier ouvert — vous travaillez sur les valeurs par défaut firmware. Cliquez sur **Ouvrir un fichier…** pour modifier un Profiles.ini existant, ou éditez et **Sauvegardez** pour en créer un nouveau. » L'ancien wording induisait en erreur quand l'utilisateur lançait l'app pour créer un fichier neuf (pas une « démo »).
