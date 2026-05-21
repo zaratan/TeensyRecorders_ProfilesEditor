@@ -429,12 +429,9 @@ class ProfileEditor(QWidget):
                     widget = QLineEdit(val)
                     if key in ["StartTime", "EndTime"]:
                         widget.setPlaceholderText("HH:MM")
+                    elif key in ["StartDate", "EndDate"]:
+                        widget.setPlaceholderText("JJ/MM ou --/--")
                     widget.textChanged.connect(lambda v, k=key: self.update_cache(k, v))
-
-                elif key in ["StartDate", "EndDate"]: # Autoriser "--/--" ou "jj/mm"
-                    if val and val != "--/--" and not re.match(r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val):
-                        QMessageBox.warning(self, "Erreur", f"{key} doit être au format JJ/MM ou --/--")
-                        return
 
                 elif meta["type"] == "combo":
                     widget = QComboBox()
@@ -510,6 +507,12 @@ class ProfileEditor(QWidget):
                 elif key in ["StartTime", "EndTime"]:
                     if val and not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", val):
                         QMessageBox.warning(self, "Erreur", f"{key} doit être au format HH:MM (ex: 08:30)")
+                        return
+                elif key in ["StartDate", "EndDate"]:
+                    # Accept "--/--" (no limit) or "JJ/MM" (day/month, no year — firmware
+                    # tolerates impossible combos like 31/02 too, so we don't over-validate).
+                    if val and val != "--/--" and not re.match(r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val):
+                        QMessageBox.warning(self, "Erreur", f"{key} doit être au format JJ/MM ou --/--")
                         return
 
             elif meta["type"] == "int":

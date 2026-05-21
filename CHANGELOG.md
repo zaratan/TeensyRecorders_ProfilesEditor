@@ -2,6 +2,26 @@
 
 Toutes les modifications notables du projet sont documentées ici.
 
+## [Unreleased]
+
+### Corrigé
+- **Unités des durées d'événement** : `MinDuration` et `MaxDuration` étaient étiquetés en millisecondes alors que le firmware les lit en secondes (`DecodeInt` 1-99 s / 1-999 s). Saisir « 30 ms » pour une durée d'enregistrement produisait en réalité 30 s côté appareil.
+- **Type du champ `PowerBank`** : exposé comme entier 0–255 (défaut 255), alors que le firmware utilise `DecodeBool` (strict 0/1). Toute autre valeur — y compris 255 — était silencieusement réinterprétée comme 0. Désormais combo `0`/`1`, défaut `0` (recommandation `ManuelTR.pdf §8.32`).
+- **Modèle de microphone** : la chaîne `ICS40730` exposée par l'app n'existe pas dans la liste `sMTValues` du firmware (`SPU0410`, `ICS43730`, `FG23329`). Toute sauvegarde retombait sur le défaut firmware. Corrigé : `ICS43730`.
+- **Asymétrie firmware `HeterSelectiveFilter` / `Pre-HeterSelectiveFilter`** : le firmware *écrit* la clé sans préfixe mais la *lit* avec le préfixe `Pre-`. Les valeurs écrites par l'app étaient ignorées au reboot. L'app utilise désormais le nom lisible par le firmware.
+- **Bornes `RecTime` / `WaitTime`** : alignées sur le firmware (`RecTime` max 12 h, `WaitTime` max 24 h) au lieu d'un max trompeur à 3600 s.
+- **Valeurs par défaut désalignées** : `AbsoluteThreshold` (-80 dB), `HeterLevel` (0.1), `NumericGain` (12 dB), `TemperaturePeriod` (60 s) maintenant alignées sur les défauts firmware.
+- **Code mort** : suppression du bloc de validation `StartDate`/`EndDate` dans `build_form` (inatteignable car branché après le test `meta["type"] == "text"`). La validation regex `JJ/MM` est désormais effectivement appliquée au moment de la sauvegarde.
+
+### Supprimé
+- 4 paramètres exposés dans l'UI mais inconnus du firmware (silencieusement perdus à la sauvegarde) : `MaxFileLength`, `MinLevel`, `PreTrigger`, `THSensorEnable`. Aucune trace dans `ImportProfiles` / `ExportProfiles` du firmware.
+
+### Interne
+- Template `initial_profile/Profiles.ini` réparé : `PowerBank=255` → `0` ; `HeterSelectiveFilter` → `Pre-HeterSelectiveFilter` dans les 5 sections.
+- Ajout d'un script `tests/test_schema_sync.py` (sans dépendance externe) qui vérifie que toutes les clés de `FIELDS` sont présentes dans toutes les sections `[Profile_N]` du template, et que les clés héritées d'un firmware ancien (`HeterSelectiveFilter` sans préfixe) ne réapparaissent pas.
+
+---
+
 ## [0.6.1] - 2026-05-19
 ### Changé
 - **Nom du bundle macOS** : `TeensyProfilesEditor.app` → `TeensyRecorders Profiles Editor.app`. Le nom complet (avec espaces) est désormais affiché par Finder et Spotlight, sans avoir besoin de l'override `CFBundleDisplayName`. Le workflow `release.yml` a été mis à jour en conséquence ; le nom des artefacts zip et du `.exe` Windows reste inchangé.
