@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QFormLayout, QTabWidget, QTabBar, QFrame, QToolTip, QApplication, QScrollArea, QSizePolicy, QDialog, QToolButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QFormLayout, QTabWidget, QTabBar, QFrame, QApplication, QScrollArea, QSizePolicy, QDialog, QToolButton
 from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
-from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths, QSettings
+from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths, QSettings, QSignalBlocker
 
 from .ini_utils import (
     detect_dropped_keys,
@@ -29,6 +29,7 @@ class HelperPopup(QFrame):
                 color: white;
                 padding: 8px 12px;
                 font-size: 12px;
+                line-height: 145%;
             }
         """)
         layout = QVBoxLayout(self)
@@ -273,9 +274,13 @@ class ProfileEditor(QWidget):
         open_btn.setToolTip("Charger un fichier Profiles.ini existant")
         open_btn.clicked.connect(self.open_ini_file)
         source_layout.addWidget(open_btn)
-        self.source_path_label = QLabel(str(self.ini_path.resolve()))
-        self.source_path_label.setStyleSheet("color: gray;")
+        self.source_path_label = QLabel()
+        self.source_path_label.setStyleSheet("color: #a0a0a0;")
         self.source_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Width cap so a long resolved path doesn't push the layout; full
+        # path stays available via tooltip.
+        self.source_path_label.setMaximumWidth(360)
+        self._set_source_path_label(self.ini_path)
         source_layout.addWidget(self.source_path_label, stretch=1)
         layout.addLayout(source_layout)
 
@@ -311,9 +316,10 @@ class ProfileEditor(QWidget):
 
         # Schema-drift banner slot: an empty layout that hosts the (re)built
         # banner. Keeping it as a dedicated slot lets us swap the banner on
-        # every file reload without messing with insertion indices.
+        # every file reload without messing with insertion indices. Small
+        # top margin so the banner doesn't kiss the device combo above.
         self.drift_banner_slot = QVBoxLayout()
-        self.drift_banner_slot.setContentsMargins(0, 0, 0, 0)
+        self.drift_banner_slot.setContentsMargins(0, 8, 0, 0)
         layout.addLayout(self.drift_banner_slot)
         self._refresh_drift_banner()
 
@@ -332,7 +338,7 @@ class ProfileEditor(QWidget):
         dir_layout.addWidget(browse_btn)
 
         self.out_dir_label = QLabel(str(self.out_dir.resolve()))
-        self.out_dir_label.setStyleSheet("color: gray;")
+        self.out_dir_label.setStyleSheet("color: #a0a0a0;")
         self.out_dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         dir_layout.addWidget(self.out_dir_label, stretch=1)
         layout.addLayout(dir_layout)
@@ -366,10 +372,16 @@ class ProfileEditor(QWidget):
         layout.addWidget(separator)
         footer = QLabel(f"© Alexandre LANGLAIS - 2026 - v{BUILD_VERSION}")
         footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet("color: gray; font-size: 10px;")
+        footer.setStyleSheet("color: #a0a0a0; font-size: 10px;")
         layout.addWidget(footer)
 
         self.setLayout(layout)
+
+    def _set_source_path_label(self, path: Path) -> None:
+        """Show the filename inline, stash the full path in the tooltip."""
+        resolved = str(path.resolve())
+        self.source_path_label.setText(path.name)
+        self.source_path_label.setToolTip(resolved)
 
     def _parse_user_file(self) -> None:
         """Re-read self.ini_path from disk and refresh drift detection."""
@@ -396,7 +408,7 @@ class ProfileEditor(QWidget):
         self._parse_user_file()
         # New file = fresh starting point: discard pending edits.
         self.cache = {pid: {} for pid in PROFILE_LABELS.values()}
-        self.source_path_label.setText(str(self.ini_path.resolve()))
+        self._set_source_path_label(self.ini_path)
         self._refresh_drift_banner()
         self.build_form()
 
@@ -453,6 +465,7 @@ class ProfileEditor(QWidget):
 
         dismiss_btn = QToolButton()
         dismiss_btn.setText("✕")
+        dismiss_btn.setToolTip("Masquer cet avis")
         dismiss_btn.setCursor(Qt.PointingHandCursor)
         dismiss_btn.setStyleSheet(
             "QToolButton { color: white; background: transparent; border: none; "
@@ -737,6 +750,20 @@ class ProfileEditor(QWidget):
         # Persist the device-type choice and refresh greying.
         QSettings().setValue("device_type", self.device_combo.currentData())
         self.apply_conditional_visibility()
+        # If the device switch forced the firmware-coercion path (e.g. user
+        # was on Heterodyne, switched to PR), tell them — silent mutation
+        # of a profile value is exactly the thing the drift banner exists
+        # to prevent.
+        coerced = getattr(self, "_last_coerced_mode", None)
+        if coerced:
+            QMessageBox.information(
+                self,
+                "Mode incompatible avec ce type d'appareil",
+                f"Le mode « {coerced} » n'est pas supporté par le matériel "
+                f"sélectionné. L'enregistrement a basculé sur « Auto record ». "
+                f"Vous pouvez choisir un autre mode dans le menu déroulant.",
+            )
+            self._last_coerced_mode = None
 
     def _current_value(self, key: str) -> str:
         """Read the current value of a field — widget first (truth in UI),
@@ -838,16 +865,19 @@ class ProfileEditor(QWidget):
 
         return enabled
 
-    def _refresh_opmode_combo_items(self) -> None:
+    def _refresh_opmode_combo_items(self) -> str | None:
         """Disable OpMode entries that the firmware would refuse for the
         current device. Mirrors CModeGeneric.cpp:873 (PHETER / AUDIOREC are
         AR-only) and CModeParams.cpp:1071+ (SYNCHRO is PRS-S-only). If the
         currently-selected mode becomes invalid, fall back to 'Auto record'.
+
+        Returns the name of the mode that was coerced away (so the caller
+        can surface a notice), or None if no coercion happened.
         """
         device = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
         opmode = self.inputs.get("OpMode")
         if not isinstance(opmode, QComboBox):
-            return
+            return None
         rules = {
             "Heterodyne": device == "AR",
             "Audio Rec.": device == "AR",
@@ -861,11 +891,18 @@ class ProfileEditor(QWidget):
                 item.setEnabled(rules.get(choice_val, True))
         # If the currently-selected mode just became invalid, switch to
         # Auto record (the firmware would coerce to the same default).
+        # Block signals on the fallback so we don't re-enter
+        # apply_conditional_visibility recursively through the OpMode
+        # currentIndexChanged → _on_controller_changed wire.
         current_item = model.item(opmode.currentIndex())
         if current_item is not None and not current_item.isEnabled():
+            coerced_from = opmode.currentData()
             fallback = opmode.findData("Auto record")
             if fallback >= 0:
-                opmode.setCurrentIndex(fallback)
+                with QSignalBlocker(opmode):
+                    opmode.setCurrentIndex(fallback)
+                return coerced_from
+        return None
 
     def apply_conditional_visibility(self) -> None:
         """Grey out fields that don't apply to the current OpMode / SampFreq /
@@ -873,7 +910,12 @@ class ProfileEditor(QWidget):
         keep their value (no reset on toggle). Subtitle headers grey out
         when all the fields below them are inactive. OpMode combo items
         invalid for the current device are also disabled."""
-        self._refresh_opmode_combo_items()
+        # Capture any OpMode coercion (e.g. user switches device PR → no AR,
+        # so Heterodyne can't stay selected). Stashed on self so the explicit
+        # user action that triggered the change (_on_device_changed) can
+        # surface a notice — but only that path, not the silent boot-time
+        # apply where the file already had an invalid mode.
+        self._last_coerced_mode = self._refresh_opmode_combo_items()
         enabled = self._compute_enabled_map()
         for key, widget in self.inputs.items():
             is_on = enabled.get(key, True)
@@ -908,8 +950,13 @@ class ProfileEditor(QWidget):
 
     def change_profile(self, label):
         self.sync_widgets_to_cache()
+        # Preserve the active tab across profile switches: the user is
+        # usually comparing the same parameter across profiles.
+        prev_tab = self.tabs.currentIndex()
         self.profile_id = PROFILE_LABELS[label]
         self.build_form()
+        if 0 <= prev_tab < self.tabs.count() and self.tabs.isTabEnabled(prev_tab):
+            self.tabs.setCurrentIndex(prev_tab)
 
     # --- Sauvegarde ---
     def select_output_dir(self):
@@ -1028,21 +1075,28 @@ class ProfileEditor(QWidget):
 
         return errors
 
-    def _set_field_error(self, key: str, has_error: bool) -> None:
+    def _set_field_error(self, key: str, has_error: bool, message: str | None = None) -> None:
         """Apply / remove a red border on a field. QLineEdit gets a clean
         border; QComboBox styling is light to avoid breaking the native
-        macOS drop-down arrow."""
+        macOS drop-down arrow. When applying an error, the message (if
+        provided) is also set as the widget's tooltip so the user can see
+        the rule recap after dismissing the validation dialog."""
         widget = self.inputs.get(key)
         if widget is None:
             return
         if has_error:
+            # 2 px border so the visual reads clearly on Retina; padding is
+            # nudged to keep the field height stable.
             widget.setStyleSheet(
-                "QLineEdit { border: 1px solid #e74c3c; padding: 4px 8px; } "
-                "QComboBox { border: 1px solid #e74c3c; }"
+                "QLineEdit { border: 2px solid #e74c3c; padding: 3px 7px; } "
+                "QComboBox { border: 2px solid #e74c3c; }"
             )
+            if message is not None:
+                widget.setToolTip(message)
             self.field_errors.add(key)
         else:
             widget.setStyleSheet("")
+            widget.setToolTip("")
             self.field_errors.discard(key)
 
     def _clear_field_errors(self) -> None:
@@ -1081,19 +1135,26 @@ class ProfileEditor(QWidget):
         errors: list[tuple[str, str]] = []  # (key, human message)
         enabled = self._compute_enabled_map()
 
-        # 1. Per-field validation. Greyed-out fields skip validation: they
-        # keep their existing value (no reset) and aren't a concern for the
-        # current mode, so reporting their issues would just be noise.
+        # 1. Per-field validation. Greyed-out fields are still validated so
+        # we never write garbage that the firmware would silently reject —
+        # but their errors are NOT surfaced to the user (the field isn't
+        # relevant in the current mode, so reporting the issue would just
+        # be noise). Invalid greyed values are silently coerced to default.
         for key, meta in FIELDS.items():
-            if not enabled.get(key, True):
-                continue
             raw = self.cache[pid].get(
                 key,
                 self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))),
             )
             normalized, err = self._validate_and_normalize(key, raw)
+            is_active = enabled.get(key, True)
             if err is not None:
-                errors.append((key, err))
+                if is_active:
+                    errors.append((key, err))
+                else:
+                    # Silently coerce greyed-out field to its default.
+                    self.cache[pid][key] = str(
+                        meta.get("default", meta.get("min", ""))
+                    )
             else:
                 self.cache[pid][key] = normalized
 
@@ -1101,11 +1162,12 @@ class ProfileEditor(QWidget):
         errors.extend(self._validate_cross_field(enabled))
 
         if errors:
-            # Highlight every faulty field, switch to the tab of the first one,
-            # surface a single summary dialog. The user fixes everything in
-            # one pass instead of one-MessageBox-per-error.
-            for key, _ in errors:
-                self._set_field_error(key, True)
+            # Highlight every faulty field (with per-widget tooltip recap),
+            # switch to the tab of the first one, surface a single summary
+            # dialog. The user fixes everything in one pass instead of
+            # one-MessageBox-per-error.
+            for key, msg in errors:
+                self._set_field_error(key, True, msg)
             first_key = errors[0][0]
             tab_idx = self.field_tab_index.get(first_key)
             if tab_idx is not None:

@@ -24,6 +24,31 @@ Toutes les modifications notables du projet sont documentées ici.
 - **6 paramètres valides** précédemment absents de l'UI alors que le firmware les lit/écrit : `MasterSlave` (rôle dans un cluster PRS-S), `TopAudioFreq` / `TopDuration` / `TopPeriod` (top synchro pour PRS-S Maître), `AffRLPerm` (verrou d'affichage RhinoLogger), `BatcorderMode` (nommage compatible Batcorder ecoObs — paramètre auparavant commenté dans `config.py`).
 - **Libellés combos lisibles** : nouveau champ optionnel `choice_labels` dans `FIELDS` qui découple la valeur INI du libellé affiché. Appliqué à 14 combos `0/1` (présentés en **Non/Oui**), `ThresholdType` (**Relatif/Absolu**), `HeterodyneMode` (**Manuel/Auto**), `StereoMode` (**Stéréo/Mono droit/Mono gauche**), `LEDSynchro` (libellés FR explicites), suffixe « kHz » sur `SampFreqU`/`SampFreqA`, suffixe « dB » sur `NumericGain`, « éch. » sur `TopDuration`. La valeur écrite dans le `.ini` reste rigoureusement la même.
 
+### Corrigé (suite — post-review)
+- **`TUOffset` exprimé en minutes** : le firmware stocke `iTUOffset` en **minutes** dans la plage -720..720 (cf. `CModeGeneric.cpp:2472`). L'app le déclarait en heures (-12..14), ce qui faisait que toute valeur saisie était silencieusement réduite à quelques minutes côté appareil. Bornes UI alignées, label « Décalage UTC (min) », défaut 60 (= UTC+1 France hiver), template mis à jour de `TUOffset=2` à `TUOffset=60`.
+- **`StartStopOffset` bornes corrigées** : firmware -60..60 minutes ; l'app autorisait -360..360.
+- **`Pre-TriggerAuto` / `Pre-TriggerHeter` bornes corrigées** : firmware 0..15 / 1..15 (et `Pre-TriggerHeter` min = 1, pas 0). Defaults alignés sur firmware (1 s pour les deux).
+- **`MaxFreqA` cohérence template/FIELDS** : le défaut FIELDS écrasait silencieusement la valeur du template au save. Aligné sur 20 000 Hz (limite haute audible humaine — cohérent avec le template).
+- **`fHighpassFilter` défaut firmware** : 0.0 → 0.1 (cf. `CModeGeneric.cpp:2420`).
+- **Récursion `_refresh_opmode_combo_items`** : `setCurrentIndex(fallback)` retriggerait `apply_conditional_visibility` à travers le signal `currentIndexChanged`. `QSignalBlocker` posé sur le combo OpMode pendant la coercion.
+- **Champs grisés validés silencieusement avant écriture** : un champ caché par switch de mode contenant une valeur invalide était écrit tel quel dans le `.ini`. Désormais validé en arrière-plan et coercé au défaut firmware si hors bornes — l'utilisateur ne voit aucun message d'erreur (le champ n'étant pas pertinent dans le mode courant).
+- **Coercion silencieuse de l'`OpMode`** au changement de type d'appareil → MessageBox d'information qui explique le repli vers Auto record. Plus de mutation silencieuse de la valeur du profil.
+- **`LowpassFilter` label ambigu** : « Filtre passe-bas / linéaire » → **« Filtrage automatique »**. Le champ a un comportement double selon `Fréquence ultrason`, et Non/Oui ne décrivait pas correctement les deux modes.
+- **Contraste AA des badges de scope** : amber PRS `#c08019` (3.4:1 sur blanc) → `#8c5d12` (~5.2:1, passe AA).
+- **Bordure d'erreur 1 px → 2 px** + **tooltip par champ** avec le message d'erreur en cas de validation bloquée au save. L'utilisateur peut survoler la bordure rouge pour voir la règle violée sans ré-ouvrir le dialogue.
+- **`color: gray` → `#a0a0a0`** sur les 3 labels gris (path source, dossier sortie, footer copyright) — `gray` (= `#808080`) ratait l'AA contrast sur fond macOS dark.
+- **Path source affiché en chemin court (nom de fichier seul)** + tooltip plein chemin → plus de risque de débordement horizontal sur le path résolu.
+- **Tab actif préservé au switch de profil** : l'utilisateur reste sur le même onglet d'un profil à l'autre (comparaison facilitée).
+- **Commentaires obsolètes du template embarqué** : `"ICS40730"` (typo amont) → `"ICS43730"` (×5 sections) pour refléter la vraie valeur acceptée par `sMTValues[]`.
+
+### Supprimé (suite)
+- **`app/profile.py`** : dataclass stub jamais wiré. La validation cross-field qu'il devait centraliser a finalement atterri dans `ui_editor._validate_cross_field`. Conforme à la règle « pas de code mort après tentative non-aboutie ».
+- **Import `QToolTip`** : inutilisé depuis le retrait du tooltip natif sur les icônes d'aide.
+
+### Tests
+- **`tests/test_schema_sync.py` refactor** : remplace le parsing regex de `app/config.py` par un import direct de `FIELDS`/`SCOPE_BADGES`. Ajoute deux nouvelles vérifications : typo guard sur les attributs FIELDS autorisés (`type, min, max, step, default, choices, choice_labels, tag, helper, limit, scope`), et cohérence `len(choices) == len(choice_labels)` quand les deux sont présents.
+- **`tests/test_template_roundtrip.py`** (nouveau) : garde l'invariant clé de la pipeline « template canonique » — `parse_ini(template) → render_from_template(template, {}) == template`. Exerce aussi l'injection d'override (string avec quotes, int sans quote), la détection missing/dropped, et la migration de l'alias `HeterSelectiveFilter`.
+
 ### Corrigé
 - **Unités des durées d'événement** : `MinDuration` et `MaxDuration` étaient étiquetés en millisecondes alors que le firmware les lit en secondes (`DecodeInt` 1-99 s / 1-999 s). Saisir « 30 ms » pour une durée d'enregistrement produisait en réalité 30 s côté appareil.
 - **Type du champ `PowerBank`** : exposé comme entier 0–255 (défaut 255), alors que le firmware utilise `DecodeBool` (strict 0/1). Toute autre valeur — y compris 255 — était silencieusement réinterprétée comme 0. Désormais combo `0`/`1`, défaut `0` (recommandation `ManuelTR.pdf §8.32`).

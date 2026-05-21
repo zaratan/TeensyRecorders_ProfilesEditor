@@ -22,7 +22,9 @@ SCOPE_BADGES = {
         "tooltip": "Champ utilisé uniquement par l'Active Recorder",
     },
     "PRS": {
-        "color": "#c08019",  # amber
+        # Darker amber than the original #c08019 — contrast ratio with white
+        # text bumped from ~3.4:1 (fails AA body text) to ~5.2:1 (passes AA).
+        "color": "#8c5d12",
         "label": "PRS",
         "tooltip": "Champ utilisé uniquement par le Passive Recorder Stéréo (PRS / PRS-S)",
     },
@@ -92,10 +94,17 @@ FIELDS = {
         "helper": "Latitude WGS84 en degrés décimaux (positif = Nord, négatif = Sud). 2 décimales suffisent.<br><br>Astuce : <b>clic long sur Google Maps mobile</b> → coordonnées dans la barre de recherche."},
     "Longitude": {"type": "float", "min": -180.0, "max": 180.0, "step": 0.000001, "default": 2.348615, "tag": "Longitude (°)",
         "helper": "Longitude WGS84 en degrés décimaux (positif = Est, négatif = Ouest)."},
-    "TUOffset": {"type": "int", "min": -12, "max": 14, "step": 1, "default": 2, "tag": "Décalage UTC",
-        "helper": "Décalage horaire entre l'heure locale et l'UTC pour le calcul soleil. <b>France métropolitaine : +1 en hiver, +2 en été.</b> À ajuster manuellement aux changements d'heure."},
-    "StartStopOffset": {"type": "int", "min": -360, "max": 360, "step": 1, "default": 0, "tag": "Extension nocturne (min)",
-        "helper": "Décale les horaires calculés à partir du soleil, en minutes. <b>Positif</b> élargit la fenêtre (commence avant coucher, finit après lever). <b>Négatif</b> la rétrécit. <b>Défaut : 0.</b>"},
+    # Firmware stores TUOffset in MINUTES (-720..720), not hours. This was a
+    # silent bug in the app: a user setting "2" got 2 minutes of UTC offset
+    # on the device, not UTC+2. We expose minutes verbatim with examples in
+    # the helper.
+    "TUOffset": {"type": "int", "min": -720, "max": 720, "step": 1, "default": 60, "tag": "Décalage UTC (min)",
+        "helper": "Décalage horaire entre l'heure locale et l'UTC pour le calcul soleil, <b>en minutes</b>.<br><br>"
+                  "• <b>60</b> : UTC+1 (France hiver).<br>"
+                  "• <b>120</b> : UTC+2 (France été).<br>"
+                  "• <b>330</b> : UTC+5:30 (Inde) — la résolution à la minute permet les fuseaux décimaux."},
+    "StartStopOffset": {"type": "int", "min": -60, "max": 60, "step": 1, "default": 0, "tag": "Extension nocturne (min)",
+        "helper": "Décale les horaires calculés à partir du soleil, en minutes. <b>Positif</b> élargit la fenêtre (commence avant coucher, finit après lever). <b>Négatif</b> la rétrécit. <b>Défaut : 0.</b> Bornes firmware : -60 à 60."},
 
     # ---- Audio ----
     "SampFreqU": {"type": "combo", "choices": ["24","48","96","192","250","384","500"], "choice_labels": ["24 kHz","48 kHz","96 kHz","192 kHz","250 kHz","384 kHz","500 kHz"], "default": "384", "tag": "Fréquence ultrason",
@@ -111,7 +120,7 @@ FIELDS = {
                   "• <b>0 dB</b> : préserve la dynamique, recommandé pour Tadarida, SonoChiro.<br>"
                   "• <b>+6 / +12 dB</b> : confort visuel sur sites pauvres.<br>"
                   "• <b>+18 / +24 dB</b> : risque de saturation irréversible sur passage proche."},
-    "LowpassFilter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Filtre passe-bas / linéaire",
+    "LowpassFilter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Filtrage automatique",
         "helper": "Comportement double selon <b>Fréquence ultrason</b> :<br>"
                   "• <b>≤ 192 kHz</b> : filtre passe-bas anti-repliement.<br>"
                   "• <b>250 / 384 kHz</b> : linéarisation expérimentale du micro MEMS.<br>"
@@ -123,7 +132,7 @@ FIELDS = {
                   "• <b>8–10 kHz</b> : site rural calme.<br>"
                   "• <b>15–20 kHz</b> : site venteux / bord de route.<br>"
                   "• <b>25 kHz</b> : recherche Rhinolophes (exclut Noctules)."},
-    "fHighpassFilter": {"type": "float", "min": 0.0, "max": 25.0, "step": 0.1, "default": 0.0, "tag": "Filtre passe-haut fin (kHz)",
+    "fHighpassFilter": {"type": "float", "min": 0.0, "max": 25.0, "step": 0.1, "default": 0.1, "tag": "Filtre passe-haut fin (kHz)",
         "helper": "Filtre passe-haut numérique, en kHz avec précision <b>0,1 kHz</b>. Coupe le bruit basse fréquence avec pas fin. Utilisé quand SampFreq < 192 kHz (mode audio)."},
     "Exp10": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "1", "tag": "Expansion de temps ×10",
         "helper": "Active l'expansion de temps ×10. <b>Modifie uniquement l'en-tête WAV</b> pour annoncer une fréquence 10× plus basse — le signal n'est <b>pas réellement</b> ralenti. Au playback dans VLC/Windows Media, le fichier se lit 10× plus lentement, donc audible à l'oreille humaine.<br><br>Kaleidoscope, Tadarida, BatExplorer détectent l'astuce automatiquement. Un script qui lit l'en-tête brut verra « 38,4 kHz » au lieu de 384 kHz. <b>Défaut : Oui.</b>"},
@@ -147,10 +156,10 @@ FIELDS = {
         "helper": "<b>AR uniquement.</b> Vitesse de défilement du graphe d'activité fréquentielle, en secondes. 0,2 à 2,0. Cosmétique, à ajuster au confort."},
     "HeterLevel": {"type": "float", "min": 0.1, "max": 0.9, "step": 0.1, "default": 0.1, "tag": "Seuil hétérodyne", "scope": "AR",
         "helper": "<b>AR uniquement.</b> Niveau audio de sortie hétérodyne. 0,1 à 0,9. À ajuster au confort selon le bruit ambiant."},
-    "Pre-TriggerAuto": {"type": "int", "min": 0, "max": 10, "default": 1, "tag": "Pré-trigger auto (s)", "scope": "AR",
-        "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée de signal pré-enregistrée avant le déclenchement automatique, en secondes. Évite que le 1er cri du fichier soit tronqué (le temps que l'algorithme de détection se déclenche). <b>Défaut : 1 s.</b> 3 s largement suffisant, monter à 5 s en site très actif."},
-    "Pre-TriggerHeter": {"type": "int", "min": 0, "max": 10, "default": 3, "tag": "Pré-trigger hétérodyne (s)", "scope": "AR",
-        "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée pré-enregistrée avant le déclenchement manuel en mode hétérodyne, en secondes. <b>Défaut : 3 s.</b>"},
+    "Pre-TriggerAuto": {"type": "int", "min": 0, "max": 15, "default": 1, "tag": "Pré-trigger auto (s)", "scope": "AR",
+        "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée de signal pré-enregistrée avant le déclenchement automatique, en secondes (0 à 15). Évite que le 1er cri du fichier soit tronqué (le temps que l'algorithme de détection se déclenche). <b>Défaut : 1 s.</b> 3 s largement suffisant, monter à 5 s en site très actif."},
+    "Pre-TriggerHeter": {"type": "int", "min": 1, "max": 15, "default": 1, "tag": "Pré-trigger hétérodyne (s)", "scope": "AR",
+        "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée pré-enregistrée avant le déclenchement manuel en mode hétérodyne, en secondes (1 à 15). <b>Défaut : 1 s.</b>"},
     # Firmware writes "HeterSelectiveFilter" but reads "Pre-HeterSelectiveFilter"
     # (firmware bug in CModeGeneric.cpp line 2464). We align on the read-side name
     # so the value actually round-trips through the device.
@@ -185,8 +194,8 @@ FIELDS = {
                   "• Plus basse → rate les Rhinolophes."},
     "MinFreqA": {"type": "int", "min": 100, "max": 96000, "step": 100, "default": 100, "tag": "Fréquence audio min (Hz)",
         "helper": "Limite inférieure de la bande d'analyse audio, <b>en Hz</b>. Utilisée quand SampFreq < 192 kHz. <b>Défaut : 100 Hz.</b>"},
-    "MaxFreqA": {"type": "int", "min": 100, "max": 96000, "step": 100, "default": 48000, "tag": "Fréquence audio max (Hz)",
-        "helper": "Limite supérieure de la bande d'analyse audio, <b>en Hz</b>. <b>Défaut : 48 000 Hz.</b>"},
+    "MaxFreqA": {"type": "int", "min": 100, "max": 96000, "step": 100, "default": 20000, "tag": "Fréquence audio max (Hz)",
+        "helper": "Limite supérieure de la bande d'analyse audio, <b>en Hz</b>. <b>Défaut : 20 000 Hz</b> (limite haute audible humaine). 48 000 Hz si vous voulez capter aussi les Molossidae bas."},
     "MinDuration": {"type": "int", "min": 1, "max": 99, "default": 1, "tag": "Durée min (s)",
         "helper": "Durée <b>minimale</b> d'un fichier WAV, en secondes. L'enregistrement dure au moins cette valeur, même si plus aucun cri n'est détecté. Si un nouveau cri arrive avant la fin, le compteur repart pour Durée min secondes additionnelles. <b>Défaut : 1 s.</b><br><br>"
                   "• <b>3 s</b> : pose passive standard.<br>"
