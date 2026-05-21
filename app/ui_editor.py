@@ -546,10 +546,17 @@ class ProfileEditor(QWidget):
     def build_form(self):
         self.inputs.clear()
         self.tabs.clear()
+        # Per-build tracking for conditional visibility + multi-error save:
+        #   field_tab_index[key]   → which tab the field lives in (for auto-switch)
+        #   field_label[key]       → its label container (so we can grey it
+        #                            together with the input)
+        self.field_tab_index: dict[str, int] = {}
+        self.field_label: dict[str, QWidget] = {}
+        self.field_errors: set[str] = set()
         pid = self.profile_id
         section = f"Profile_{pid}"
 
-        for section_name, keys in SECTION_TITLES.items():
+        for tab_index, (section_name, keys) in enumerate(SECTION_TITLES.items()):
             group = QWidget()
             form_layout = QFormLayout()
             form_layout.setVerticalSpacing(10)
@@ -627,7 +634,10 @@ class ProfileEditor(QWidget):
                 widget.setMinimumWidth(140)
                 widget.setMaximumWidth(220)
                 self.inputs[key] = widget
-                form_layout.addRow(self.make_label_with_helper(key), widget)
+                self.field_tab_index[key] = tab_index
+                label_container = self.make_label_with_helper(key)
+                self.field_label[key] = label_container
+                form_layout.addRow(label_container, widget)
 
             group.setLayout(form_layout)
 
@@ -636,6 +646,97 @@ class ProfileEditor(QWidget):
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.NoFrame)
             self.tabs.addTab(scroll, section_name)
+
+        # All widgets are created — now wire conditional visibility on the
+        # three controller combos. Wiring AFTER populate avoids spurious
+        # apply_conditional_visibility() calls during widget creation.
+        for ctrl_key in ("OpMode", "SampFreqU", "ThresholdType"):
+            ctrl = self.inputs.get(ctrl_key)
+            if isinstance(ctrl, QComboBox):
+                ctrl.currentIndexChanged.connect(self._on_controller_changed)
+        self.apply_conditional_visibility()
+
+    def _on_controller_changed(self, _index: int) -> None:
+        # Slot wrapper that ignores the index arg from currentIndexChanged.
+        self.apply_conditional_visibility()
+
+    def _current_value(self, key: str) -> str:
+        """Read the current value of a field — widget first (truth in UI),
+        then cache, then disk, then FIELDS default."""
+        widget = self.inputs.get(key)
+        if isinstance(widget, QComboBox):
+            data = widget.currentData()
+            if data is not None:
+                return str(data)
+        elif isinstance(widget, QLineEdit):
+            return widget.text().strip()
+        pid = self.profile_id
+        cached = self.cache.get(pid, {}).get(key)
+        if cached is not None:
+            return cached
+        section = f"Profile_{pid}"
+        return self.user_parsed.get(section, {}).get(
+            key, str(FIELDS.get(key, {}).get("default", ""))
+        )
+
+    def _compute_enabled_map(self) -> dict[str, bool]:
+        """Decide which fields are active given the current OpMode /
+        SampFreqU / ThresholdType. Fields not mentioned default to enabled.
+        """
+        enabled: dict[str, bool] = {k: True for k in FIELDS}
+        op_mode = self._current_value("OpMode")
+        samp_us = self._current_value("SampFreqU")
+        threshold_type = self._current_value("ThresholdType")
+
+        # --- OpMode-driven rules
+        if op_mode != "Timed recording":
+            for k in ("RecTime", "WaitTime"):
+                enabled[k] = False
+        if op_mode != "RhinoLogger":
+            enabled["AffRLPerm"] = False
+        if op_mode != "Heterodyne":
+            for k in (
+                "HeterodyneMode", "AutoRecHeter", "RefreshGraphe", "HeterLevel",
+                "HeterWithGraph", "Pre-TriggerAuto", "Pre-TriggerHeter",
+                "Pre-HeterSelectiveFilter", "HeterAGC", "HeterAutoPlay",
+            ):
+                enabled[k] = False
+        if op_mode != "Synchro":
+            for k in ("MasterSlave", "TopAudioFreq", "TopDuration",
+                      "TopPeriod", "LEDSynchro"):
+                enabled[k] = False
+
+        # --- SampFreqU-driven rules. Ultrasound when SampFreq ≥ 192 kHz;
+        # audio band and the float-step HP filter take over below.
+        try:
+            sf_khz = int(samp_us)
+        except (ValueError, TypeError):
+            sf_khz = 384
+        if sf_khz >= 192:
+            for k in ("MinFreqA", "MaxFreqA", "fHighpassFilter"):
+                enabled[k] = False
+        else:
+            for k in ("MinFreqUS", "MaxFreqUS", "HighpassFilter"):
+                enabled[k] = False
+
+        # --- ThresholdType: relative (0) vs absolute (1)
+        if threshold_type == "0":
+            enabled["AbsoluteThreshold"] = False
+        elif threshold_type == "1":
+            enabled["RelativeThreshold"] = False
+
+        return enabled
+
+    def apply_conditional_visibility(self) -> None:
+        """Grey out fields that don't apply to the current OpMode / SampFreq /
+        ThresholdType. Greyed widgets keep their value (no reset on toggle)."""
+        enabled = self._compute_enabled_map()
+        for key, widget in self.inputs.items():
+            is_on = enabled.get(key, True)
+            widget.setEnabled(is_on)
+            label = self.field_label.get(key)
+            if label is not None:
+                label.setEnabled(is_on)
 
     def change_profile(self, label):
         self.sync_widgets_to_cache()
@@ -649,10 +750,13 @@ class ProfileEditor(QWidget):
             self.out_dir = Path(dir_)
             self.out_dir_label.setText(str(self.out_dir.resolve()))
 
-    def _validate_and_normalize(self, key: str, raw: str) -> str | None:
-        """Validate a single value against its FIELDS spec; return the
-        canonical INI-form string, or None if the value is invalid (a
-        QMessageBox has already been shown to the user).
+    def _validate_and_normalize(self, key: str, raw: str) -> tuple[str | None, str | None]:
+        """Validate a single value against its FIELDS spec.
+
+        Returns (normalized_value, error_message). Exactly one of the two is
+        None: a valid value returns (str, None); an invalid value returns
+        (None, "humain message"). Caller decides how to surface the error
+        (border, MessageBox, etc.).
         """
         meta = FIELDS[key]
         val = raw
@@ -660,24 +764,23 @@ class ProfileEditor(QWidget):
             if key in ("ProfileName", "WavPrefix"):
                 limit = meta.get("limit")
                 if limit and len(val) > limit:
-                    QMessageBox.warning(self, "Erreur", f"{key} limité à {limit} caractères")
-                    return None
+                    return None, f"limité à {limit} caractères"
                 if re.search(r"[^A-Za-z0-9 _-]", val):
-                    QMessageBox.warning(self, "Erreur", f"{key} contient des caractères interdits")
-                    return None
-            elif key in ("StartTime", "EndTime"):
+                    return None, "contient des caractères interdits"
+                return val, None
+            if key in ("StartTime", "EndTime"):
                 if val and not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", val):
-                    QMessageBox.warning(self, "Erreur", f"{key} doit être au format HH:MM (ex: 08:30)")
-                    return None
-            elif key in ("StartDate", "EndDate"):
-                # Accept "--/--" (no limit) or "JJ/MM" (firmware tolerates 31/02
-                # so we keep validation lenient on the day/month combo itself).
+                    return None, "format attendu HH:MM (ex: 08:30)"
+                return val, None
+            if key in ("StartDate", "EndDate"):
+                # Accept "--/--" (no limit) or "JJ/MM" (firmware tolerates
+                # impossible combos like 31/02; we don't over-validate).
                 if val and val != "--/--" and not re.match(
                     r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])$", val
                 ):
-                    QMessageBox.warning(self, "Erreur", f"{key} doit être au format JJ/MM ou --/--")
-                    return None
-            return val
+                    return None, "format attendu JJ/MM ou --/--"
+                return val, None
+            return val, None
 
         if meta["type"] == "int":
             try:
@@ -685,11 +788,8 @@ class ProfileEditor(QWidget):
             except (ValueError, TypeError):
                 val_int = meta.get("default", meta["min"])
             if not (meta["min"] <= val_int <= meta["max"]):
-                QMessageBox.warning(
-                    self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}"
-                )
-                return None
-            return str(val_int)
+                return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
+            return str(val_int), None
 
         if meta["type"] == "float":
             normalized = (val or "").strip().replace(",", ".")  # accept comma input
@@ -698,18 +798,88 @@ class ProfileEditor(QWidget):
             except (ValueError, TypeError):
                 val_f = meta.get("default", meta["min"])
             if not (meta["min"] <= val_f <= meta["max"]):
-                QMessageBox.warning(
-                    self, "Erreur", f"{key} doit être entre {meta['min']} et {meta['max']}"
-                )
-                return None
+                return None, f"hors bornes (attendu {meta['min']}–{meta['max']})"
             step = meta.get("step")
             if step:
                 decimals = 6 if key in ("Latitude", "Longitude") else 3
                 val_f = round(round((val_f - meta["min"]) / step) * step + meta["min"], decimals)
-            return str(val_f)
+            return str(val_f), None
 
         # combo: stored as-is (the choice value was already extracted via userData)
-        return val
+        return val, None
+
+    def _validate_cross_field(self, enabled: dict[str, bool]) -> list[tuple[str, str]]:
+        """Return [(key, message), ...] for cross-field constraint violations.
+        Skips checks involving greyed-out fields so the user isn't yelled at
+        about a mode they're not in."""
+
+        def as_int(k: str) -> int | None:
+            try:
+                return int(self._current_value(k))
+            except (ValueError, TypeError):
+                return None
+
+        errors: list[tuple[str, str]] = []
+
+        if enabled.get("MinFreqUS") and enabled.get("MaxFreqUS"):
+            lo, hi = as_int("MinFreqUS"), as_int("MaxFreqUS")
+            if lo is not None and hi is not None and lo >= hi:
+                errors.append(("MaxFreqUS", "doit être supérieure à la Fréquence US min"))
+
+        if enabled.get("MinFreqA") and enabled.get("MaxFreqA"):
+            lo, hi = as_int("MinFreqA"), as_int("MaxFreqA")
+            if lo is not None and hi is not None and lo >= hi:
+                errors.append(("MaxFreqA", "doit être supérieure à la Fréquence audio min"))
+
+        lo_d, hi_d = as_int("MinDuration"), as_int("MaxDuration")
+        if lo_d is not None and hi_d is not None and lo_d > hi_d:
+            errors.append(("MaxDuration", "doit être supérieure ou égale à la Durée min"))
+
+        # Nyquist: max active frequency (Hz) must be ≤ SampFreq/2.
+        # SampFreqU is stored as a kHz string ("384"). Nyquist_Hz = kHz × 500.
+        samp_us = self._current_value("SampFreqU")
+        try:
+            nyquist = int(samp_us) * 500
+        except (ValueError, TypeError):
+            nyquist = None
+        if nyquist is not None:
+            if enabled.get("MaxFreqUS"):
+                hi = as_int("MaxFreqUS")
+                if hi is not None and hi > nyquist:
+                    errors.append((
+                        "MaxFreqUS",
+                        f"dépasse la limite Nyquist ({nyquist} Hz à {samp_us} kHz)",
+                    ))
+            if enabled.get("MaxFreqA"):
+                hi = as_int("MaxFreqA")
+                if hi is not None and hi > nyquist:
+                    errors.append((
+                        "MaxFreqA",
+                        f"dépasse la limite Nyquist ({nyquist} Hz à {samp_us} kHz)",
+                    ))
+
+        return errors
+
+    def _set_field_error(self, key: str, has_error: bool) -> None:
+        """Apply / remove a red border on a field. QLineEdit gets a clean
+        border; QComboBox styling is light to avoid breaking the native
+        macOS drop-down arrow."""
+        widget = self.inputs.get(key)
+        if widget is None:
+            return
+        if has_error:
+            widget.setStyleSheet(
+                "QLineEdit { border: 1px solid #e74c3c; padding: 4px 8px; } "
+                "QComboBox { border: 1px solid #e74c3c; }"
+            )
+            self.field_errors.add(key)
+        else:
+            widget.setStyleSheet("")
+            self.field_errors.discard(key)
+
+    def _clear_field_errors(self) -> None:
+        for key in list(self.field_errors):
+            self._set_field_error(key, False)
 
     def _collect_overrides(self) -> dict[str, dict[str, str]]:
         """Build the {section: {key: value}} overrides dict from the user file
@@ -737,16 +907,51 @@ class ProfileEditor(QWidget):
         pid = self.profile_id
         section = f"Profile_{pid}"
 
-        # Validate every editable value for the currently-shown profile.
-        # (Other profiles' cached values are written through unchanged for now;
-        # multi-profile validation is in scope for the conditional-visibility
-        # phase.)
+        # Wipe any leftover error borders from the previous attempt.
+        self._clear_field_errors()
+
+        errors: list[tuple[str, str]] = []  # (key, human message)
+        enabled = self._compute_enabled_map()
+
+        # 1. Per-field validation. Greyed-out fields skip validation: they
+        # keep their existing value (no reset) and aren't a concern for the
+        # current mode, so reporting their issues would just be noise.
         for key, meta in FIELDS.items():
-            raw = self.cache[pid].get(key, self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))))
-            normalized = self._validate_and_normalize(key, raw)
-            if normalized is None:
-                return
-            self.cache[pid][key] = normalized
+            if not enabled.get(key, True):
+                continue
+            raw = self.cache[pid].get(
+                key,
+                self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))),
+            )
+            normalized, err = self._validate_and_normalize(key, raw)
+            if err is not None:
+                errors.append((key, err))
+            else:
+                self.cache[pid][key] = normalized
+
+        # 2. Cross-field constraints (ordering, Nyquist).
+        errors.extend(self._validate_cross_field(enabled))
+
+        if errors:
+            # Highlight every faulty field, switch to the tab of the first one,
+            # surface a single summary dialog. The user fixes everything in
+            # one pass instead of one-MessageBox-per-error.
+            for key, _ in errors:
+                self._set_field_error(key, True)
+            first_key = errors[0][0]
+            tab_idx = self.field_tab_index.get(first_key)
+            if tab_idx is not None:
+                self.tabs.setCurrentIndex(tab_idx)
+            lines = [
+                f"  • {FIELDS.get(k, {}).get('tag', k)} : {msg}"
+                for k, msg in errors
+            ]
+            QMessageBox.warning(
+                self,
+                "Erreurs de validation",
+                "Veuillez corriger les paramètres suivants :\n\n" + "\n".join(lines),
+            )
+            return
 
         # Render the output file from the canonical template, injecting the
         # validated values. This guarantees the output is always complete and
