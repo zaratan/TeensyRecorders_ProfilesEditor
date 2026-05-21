@@ -31,6 +31,7 @@ from app.ini_utils import LEGACY_ALIASES, load_template_lines, parse_ini  # noqa
 ALLOWED_FIELD_ATTRS = {
     "type", "min", "max", "step", "default",
     "choices", "choice_labels", "tag", "helper", "limit", "scope",
+    "unit_factor",  # 1000 for fields stored in Hz on disk but shown in kHz in UI
 }
 
 

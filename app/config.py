@@ -198,19 +198,30 @@ FIELDS = {
         "helper": "<b>Zero-Crossing</b> (style AnaBat) au lieu du format WAV. <b>10–100× plus petit</b>, mais ne mémorise que la fréquence dominante, pas l'amplitude.<br><br>Compatible AnaLook, <b>incompatible avec les classificateurs modernes</b> (Kaleidoscope, Tadarida, SonoChiro). Restez en WAV pour 99 % des usages."},
 
     # ---- Fréquences ----
-    "MinFreqUS": {"type": "int", "min": 100, "max": 150000, "step": 100, "default": 10000, "tag": "Fréquence ultrason min (Hz)",
-        "helper": "Limite inférieure de la bande d'analyse ultrason, <b>en Hz</b>. Sous cette fréquence, l'énergie est ignorée pour le déclenchement (mais le WAV reste large bande). <b>Défaut : 10 000 Hz</b> (= 10 kHz).<br><br>"
-                  "• <b>10 000–15 000 Hz</b> : standard chiroptéro tous taxons.<br>"
+    # The 4 Min/Max Freq fields are stored in Hz on disk (firmware contract,
+    # cf. DecodeInt ranges in CModeGeneric.cpp:2456-2462) but exposed in kHz
+    # in the UI — chiropterologists think in kHz, and 100-Hz precision over
+    # a 100..150000 Hz range is needlessly cluttered. The "unit_factor"
+    # attribute drives the conversion at the I/O boundary: cache values are
+    # in UI units (kHz, float), and ``_ui_to_ini`` / ``_ini_to_ui`` translate
+    # only when reading from / writing to the disk format.
+    "MinFreqUS": {"type": "float", "min": 0.1, "max": 150.0, "step": 0.1, "default": 10.0,
+        "unit_factor": 1000, "tag": "Fréquence ultrason min (kHz)",
+        "helper": "Limite inférieure de la bande d'analyse ultrason, <b>en kHz</b> (précision 0,1 kHz). Sous cette fréquence, l'énergie est ignorée pour le déclenchement (mais le WAV reste large bande). <b>Défaut : 10 kHz.</b><br><br>"
+                  "• <b>10–15 kHz</b> : standard chiroptéro tous taxons.<br>"
                   "• Plus haute → rate Molossidae bas et Noctules.<br>"
                   "• Plus basse → déclenchements parasites (vent, voiture)."},
-    "MaxFreqUS": {"type": "int", "min": 100, "max": 150000, "step": 100, "default": 120000, "tag": "Fréquence ultrason max (Hz)",
-        "helper": "Limite supérieure de la bande d'analyse ultrason, <b>en Hz</b>. <b>Défaut : 120 000 Hz</b> (= 120 kHz).<br><br>"
-                  "• <b>120 000–150 000 Hz</b> : couvre toutes les espèces françaises (Petit Rhinolophe ~110 kHz).<br>"
+    "MaxFreqUS": {"type": "float", "min": 0.1, "max": 150.0, "step": 0.1, "default": 120.0,
+        "unit_factor": 1000, "tag": "Fréquence ultrason max (kHz)",
+        "helper": "Limite supérieure de la bande d'analyse ultrason, <b>en kHz</b>. <b>Défaut : 120 kHz.</b><br><br>"
+                  "• <b>120–150 kHz</b> : couvre toutes les espèces françaises (Petit Rhinolophe ~110 kHz).<br>"
                   "• Plus basse → rate les Rhinolophes."},
-    "MinFreqA": {"type": "int", "min": 100, "max": 96000, "step": 100, "default": 100, "tag": "Fréquence audio min (Hz)",
-        "helper": "Limite inférieure de la bande d'analyse audio, <b>en Hz</b>. Utilisée quand SampFreq < 192 kHz. <b>Défaut : 100 Hz.</b>"},
-    "MaxFreqA": {"type": "int", "min": 100, "max": 96000, "step": 100, "default": 20000, "tag": "Fréquence audio max (Hz)",
-        "helper": "Limite supérieure de la bande d'analyse audio, <b>en Hz</b>. <b>Défaut : 20 000 Hz</b> (limite haute audible humaine). 48 000 Hz si vous voulez capter aussi les Molossidae bas."},
+    "MinFreqA": {"type": "float", "min": 0.1, "max": 96.0, "step": 0.1, "default": 0.1,
+        "unit_factor": 1000, "tag": "Fréquence audio min (kHz)",
+        "helper": "Limite inférieure de la bande d'analyse audio, <b>en kHz</b>. Utilisée quand SampFreq < 192 kHz. <b>Défaut : 0,1 kHz</b> (= 100 Hz côté firmware)."},
+    "MaxFreqA": {"type": "float", "min": 0.1, "max": 96.0, "step": 0.1, "default": 20.0,
+        "unit_factor": 1000, "tag": "Fréquence audio max (kHz)",
+        "helper": "Limite supérieure de la bande d'analyse audio, <b>en kHz</b>. <b>Défaut : 20 kHz</b> (limite haute audible humaine). 48 kHz pour capter les Molossidae bas."},
     "MinDuration": {"type": "int", "min": 1, "max": 99, "default": 1, "tag": "Durée min (s)",
         "helper": "Durée <b>minimale</b> d'un fichier WAV, en secondes. L'enregistrement dure au moins cette valeur, même si plus aucun cri n'est détecté. Si un nouveau cri arrive avant la fin, le compteur repart pour Durée min secondes additionnelles. <b>Défaut : 1 s.</b><br><br>"
                   "• <b>3 s</b> : pose passive standard.<br>"

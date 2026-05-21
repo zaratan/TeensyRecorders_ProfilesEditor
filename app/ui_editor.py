@@ -487,10 +487,12 @@ class ProfileEditor(QWidget):
         self.build_form()
 
     def _refresh_onboarding_banner(self) -> None:
-        """First-launch banner that tells the user they're currently editing
-        the embedded demo template, not their device's Profiles.ini. Hidden as
-        soon as ``has_opened_file`` is True in QSettings (set by open_ini_file
-        or save_profile)."""
+        """First-launch banner that surfaces the two entry paths: open an
+        existing Profiles.ini, or create a new one from the firmware defaults.
+        The wording does not call this state a "demo" — a user opening the
+        app to compose a brand-new file from scratch is a fully valid usage,
+        not a placeholder mode. Hidden as soon as ``has_opened_file`` is
+        True in QSettings (set by open_ini_file or save_profile)."""
         if self.onboarding_banner is not None:
             self.onboarding_banner_slot.removeWidget(self.onboarding_banner)
             self.onboarding_banner.deleteLater()
@@ -508,9 +510,9 @@ class ProfileEditor(QWidget):
         bl.setContentsMargins(10, 6, 6, 6)
         bl.setSpacing(8)
         msg = QLabel(
-            "Vous éditez actuellement le modèle de démonstration. "
-            "Cliquez sur <b>Ouvrir un fichier…</b> pour charger votre "
-            "<code>Profiles.ini</code>."
+            "Aucun fichier ouvert — vous travaillez sur les valeurs par défaut firmware. "
+            "Cliquez sur <b>Ouvrir un fichier…</b> pour modifier un <code>Profiles.ini</code> "
+            "existant, ou éditez et <b>Sauvegardez</b> pour en créer un nouveau."
         )
         msg.setTextFormat(Qt.RichText)
         msg.setWordWrap(True)
@@ -788,10 +790,10 @@ class ProfileEditor(QWidget):
                 # ---------------------------------------
 
                 meta = FIELDS[key]
-                val = self.cache[pid].get(
-                    key,
-                    self.user_parsed.get(section, {}).get(key, str(meta.get("default", ""))),
-                )
+                # _read_profile_value handles the disk-Hz → UI-kHz conversion
+                # for fields that carry a unit_factor, so the widget always
+                # shows the user-facing format.
+                val = self._read_profile_value(pid, key)
 
                 if meta["type"] == "text":
                     widget = QLineEdit(val)
@@ -910,22 +912,50 @@ class ProfileEditor(QWidget):
         return self._read_profile_value(self.profile_id, key)
 
     def _read_profile_value(self, pid: str, key: str) -> str:
-        """Read a field value for an arbitrary profile, independent of
-        whatever profile is currently displayed in the UI. Order: cache (live
-        edits) → user_parsed (disk snapshot) → FIELDS default.
-
-        save_profile uses this to validate Profile_3/4/5 while Profile_2 is
-        on screen — without it, validation would only catch problems in the
-        profile the user happens to be looking at, and the other four could
-        ship garbage values silently.
+        """Read a field value for an arbitrary profile, always in UI units.
+        Order: cache (live edits, already in UI units) → user_parsed (disk
+        snapshot, converted to UI units if the key carries a ``unit_factor``)
+        → FIELDS default. ``save_profile`` uses this to validate
+        Profile_3/4/5 while Profile_2 is on screen.
         """
         cached = self.cache.get(pid, {}).get(key)
         if cached is not None:
             return cached
         section = f"Profile_{pid}"
-        return self.user_parsed.get(section, {}).get(
-            key, str(FIELDS.get(key, {}).get("default", ""))
-        )
+        raw_disk = self.user_parsed.get(section, {}).get(key)
+        if raw_disk is not None:
+            return self._ini_to_ui(key, raw_disk)
+        return str(FIELDS.get(key, {}).get("default", ""))
+
+    @staticmethod
+    def _ini_to_ui(key: str, val: str) -> str:
+        """Disk-format → UI-format conversion. Today only applies the
+        ``unit_factor`` divisor (Hz → kHz on the 4 Min/Max Freq fields);
+        every other field passes through unchanged. A bare ``float``
+        ``str()`` would emit "10.0" rather than "10" — fine for QLineEdit
+        and consistent with the FIELDS default style.
+        """
+        factor = FIELDS.get(key, {}).get("unit_factor")
+        if not factor:
+            return val
+        try:
+            return str(float(val) / factor)
+        except (ValueError, TypeError):
+            return val
+
+    @staticmethod
+    def _ui_to_ini(key: str, val: str) -> str:
+        """UI-format → disk-format conversion. The inverse of
+        ``_ini_to_ui``: multiplies the UI value by ``unit_factor`` and
+        rounds to int. A "10.5" kHz UI input becomes "10500" on disk.
+        """
+        factor = FIELDS.get(key, {}).get("unit_factor")
+        if not factor:
+            return val
+        try:
+            return str(int(round(float(val) * factor)))
+        except (ValueError, TypeError):
+            return val
 
     def _compute_enabled_map(self, pid: str | None = None) -> dict[str, bool]:
         """Decide which fields are active given the OpMode / SampFreqU /
@@ -1198,15 +1228,21 @@ class ProfileEditor(QWidget):
             except (ValueError, TypeError):
                 return None
 
+        def as_float(k: str) -> float | None:
+            try:
+                return float(read(k).replace(",", "."))
+            except (ValueError, TypeError):
+                return None
+
         errors: list[tuple[str, str]] = []
 
         if enabled.get("MinFreqUS") and enabled.get("MaxFreqUS"):
-            lo, hi = as_int("MinFreqUS"), as_int("MaxFreqUS")
+            lo, hi = as_float("MinFreqUS"), as_float("MaxFreqUS")
             if lo is not None and hi is not None and lo >= hi:
                 errors.append(("MaxFreqUS", "doit être supérieure à la Fréquence ultrason min"))
 
         if enabled.get("MinFreqA") and enabled.get("MaxFreqA"):
-            lo, hi = as_int("MinFreqA"), as_int("MaxFreqA")
+            lo, hi = as_float("MinFreqA"), as_float("MaxFreqA")
             if lo is not None and hi is not None and lo >= hi:
                 errors.append(("MaxFreqA", "doit être supérieure à la Fréquence audio min"))
 
@@ -1214,27 +1250,29 @@ class ProfileEditor(QWidget):
         if lo_d is not None and hi_d is not None and lo_d > hi_d:
             errors.append(("MaxDuration", "doit être supérieure ou égale à la Durée min"))
 
-        # Nyquist: max active frequency (Hz) must be ≤ SampFreq/2.
-        # SampFreqU is stored as a kHz string ("384"). Nyquist_Hz = kHz × 500.
+        # Nyquist: max active frequency must be ≤ SampFreq / 2. SampFreqU is
+        # stored as a kHz integer string ("384"). Since the Min/Max Freq
+        # fields are now in UI kHz too, the comparison is unit-consistent:
+        # MaxFreqX_kHz ≤ SampFreqU_kHz / 2.
         samp_us = read("SampFreqU")
         try:
-            nyquist = int(samp_us) * 500
+            nyquist_khz = int(samp_us) / 2
         except (ValueError, TypeError):
-            nyquist = None
-        if nyquist is not None:
+            nyquist_khz = None
+        if nyquist_khz is not None:
             if enabled.get("MaxFreqUS"):
-                hi = as_int("MaxFreqUS")
-                if hi is not None and hi > nyquist:
+                hi = as_float("MaxFreqUS")
+                if hi is not None and hi > nyquist_khz:
                     errors.append((
                         "MaxFreqUS",
-                        f"dépasse la limite Nyquist ({nyquist} Hz à {samp_us} kHz)",
+                        f"dépasse la limite Nyquist ({nyquist_khz:g} kHz à {samp_us} kHz)",
                     ))
             if enabled.get("MaxFreqA"):
-                hi = as_int("MaxFreqA")
-                if hi is not None and hi > nyquist:
+                hi = as_float("MaxFreqA")
+                if hi is not None and hi > nyquist_khz:
                     errors.append((
                         "MaxFreqA",
-                        f"dépasse la limite Nyquist ({nyquist} Hz à {samp_us} kHz)",
+                        f"dépasse la limite Nyquist ({nyquist_khz:g} kHz à {samp_us} kHz)",
                     ))
 
         return errors
@@ -1285,7 +1323,10 @@ class ProfileEditor(QWidget):
         """Build the {section: {key: value}} overrides dict from the user file
         plus the current UI cache. The cache takes precedence over disk values,
         so unedited fields keep their on-disk value (or template default if
-        absent from disk).
+        absent from disk). Cache values are in UI units; ``_ui_to_ini``
+        translates them back to the disk format before merging (so the 4
+        frequency fields land as Hz integers in the output INI even though
+        the user typed kHz in the form).
         """
         overrides: dict[str, dict[str, str]] = {}
         # [Common] passed through unchanged (the app doesn't edit it).
@@ -1294,11 +1335,13 @@ class ProfileEditor(QWidget):
         # Profile_1 is read-only firmware-side ("always Beginner"); preserve as-is.
         if "Profile_1" in self.user_parsed:
             overrides["Profile_1"] = dict(self.user_parsed["Profile_1"])
-        # Profile_2..5: layer cache on top of disk values.
+        # Profile_2..5: layer cache on top of disk values, converting back to
+        # disk units on the way out.
         for pid in PROFILE_LABELS.values():
             section = f"Profile_{pid}"
             merged = dict(self.user_parsed.get(section, {}))
-            merged.update(self.cache.get(pid, {}))
+            for k, v in self.cache.get(pid, {}).items():
+                merged[k] = self._ui_to_ini(k, v)
             overrides[section] = merged
         return overrides
 
@@ -1331,12 +1374,9 @@ class ProfileEditor(QWidget):
             # relevant in this profile's current mode). Invalid greyed
             # values are silently coerced to the firmware default.
             for key, meta in FIELDS.items():
-                raw = self.cache.get(pid, {}).get(
-                    key,
-                    self.user_parsed.get(section, {}).get(
-                        key, str(meta.get("default", ""))
-                    ),
-                )
+                # Reads in UI units; ``_validate_and_normalize`` checks
+                # against the FIELDS min/max which are also in UI units.
+                raw = self._read_profile_value(pid, key)
                 normalized, err = self._validate_and_normalize(key, raw)
                 is_active = enabled.get(key, True)
                 if err is not None:

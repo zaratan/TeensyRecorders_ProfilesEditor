@@ -4,6 +4,10 @@ Toutes les modifications notables du projet sont documentées ici.
 
 ## [Unreleased]
 
+### Changé
+- **Fréquences ultrasons/audio affichées en kHz** : les 4 champs `MinFreqUS`, `MaxFreqUS`, `MinFreqA`, `MaxFreqA` étaient saisis en Hz (100..150000) — peu naturel pour un public chiroptérologue qui raisonne en kHz. L'UI affiche désormais ces valeurs en kHz (précision 0,1 kHz) avec une plage de 0,1 à 150 kHz (US) ou 0,1 à 96 kHz (audio). La conversion bidirectionnelle (kHz UI ↔ Hz INI) est opérée par `_ui_to_ini` / `_ini_to_ui` au moment du save/load — le fichier `Profiles.ini` reste rigoureusement en Hz côté disque (contrat firmware `DecodeInt` ligne 2456+). Helpers, bornes de validation, et règle Nyquist (`MaxFreqX_kHz ≤ SampFreqU_kHz / 2`) mis à jour en cohérence.
+- **Banner premier lancement reformulée** : « Vous éditez actuellement le modèle de démonstration » → « Aucun fichier ouvert — vous travaillez sur les valeurs par défaut firmware. Cliquez sur **Ouvrir un fichier…** pour modifier un Profiles.ini existant, ou éditez et **Sauvegardez** pour en créer un nouveau. » L'ancien wording induisait en erreur quand l'utilisateur lançait l'app pour créer un fichier neuf (pas une « démo »).
+
 ### Corrigé (bloquants post-review 3-agents)
 - **`HeterodyneMode` / `Pre-HeterSelectiveFilter` exposés à 0..3** au lieu de 0/1. Le firmware (`Const.h:715-740` : `HAM_MAX=4`, `HSF_MAX=4`) accepte 4 modes pour chacun : Manuel / Auto / Toujours manuel / Toujours auto, et NoSel / Selective / AlwaysNoSel / AlwaysSel. Un profil hérité contenant 2 ou 3 était silencieusement coercé à 0 (« Manuel » / « Non ») au save. Combos étendus + libellés FR explicites.
 - **Validation par-profil** : `save_profile` validait uniquement le profil courant, alors que `_collect_overrides` émet les **4 profils** depuis leur cache. Un utilisateur qui édite Profile_3 (avec une valeur invalide), switch sur Profile_2 et save écrivait Profile_3 sans avertissement. Validation et `_compute_enabled_map` désormais paramétrés par `pid`, erreurs collectées sur les 4 profils ; auto-switch vers le 1er profil en faute ; dialogue groupé par profil. Cohérent avec l'asymétrie write/read du firmware.

@@ -52,7 +52,7 @@ from app.ini_utils import (  # noqa: E402
     parse_ini,
     render_from_template,
 )
-from app.config import FIELDS  # noqa: E402
+from app.config import FIELDS, PROFILE_LABELS  # noqa: E402
 
 
 def _fail(msg: str) -> None:
@@ -206,6 +206,52 @@ def test_live_clear_error(tmpdir: Path) -> None:
     print("  ✓ B: red border live-clears once value becomes valid")
 
 
+def test_khz_to_hz_conversion(tmpdir: Path) -> None:
+    """The 4 Min/Max Freq fields are displayed in kHz, stored in Hz on disk.
+    A user typing '15.5' in MinFreqUS must land as 'MinFreqUS=15500' in the
+    written INI; reading back must show '15.5' in the UI again."""
+    QSettings().setValue("has_opened_file", True)
+    editor = _build_editor(tmpdir)
+
+    # The disk template has MinFreqUS in Hz; the UI should show kHz.
+    initial = editor.inputs["MinFreqUS"].text()
+    try:
+        initial_khz = float(initial)
+    except ValueError:
+        _fail(f"kHz: MinFreqUS widget shows non-numeric value: {initial!r}")
+    if initial_khz > 200:  # would mean the widget is still in Hz
+        _fail(f"kHz: MinFreqUS widget shows Hz, not kHz ({initial_khz})")
+
+    # Type a kHz value, save, verify the disk file carries Hz.
+    editor.inputs["MinFreqUS"].setText("15.5")
+    editor.inputs["MaxFreqUS"].setText("110")
+    editor.out_dir = tmpdir / "out_khz"
+    editor.out_dir.mkdir(exist_ok=True)
+    editor.out_name_edit.setText("converted.ini")
+    editor.save_profile()
+    out = editor.out_dir / "converted.ini"
+    if not out.exists():
+        _fail("kHz: save_profile didn't write the output file")
+    body = out.read_text(encoding="utf-8")
+    if "MinFreqUS=15500" not in body:
+        _fail(f"kHz: '15.5' kHz did not become MinFreqUS=15500 (got body: …{body[body.find('MinFreqUS'):body.find('MinFreqUS')+60]}…)")
+    if "MaxFreqUS=110000" not in body:
+        _fail("kHz: '110' kHz did not become MaxFreqUS=110000")
+
+    # Round-trip: re-open the file we just wrote, MinFreqUS widget should show 15.5 again.
+    editor.ini_path = out
+    editor._parse_user_file()
+    editor.cache = {pid: {} for pid in PROFILE_LABELS.values()}
+    editor.build_form()
+    reloaded = editor.inputs["MinFreqUS"].text()
+    try:
+        if abs(float(reloaded) - 15.5) > 0.05:
+            _fail(f"kHz round-trip: MinFreqUS reloaded as {reloaded!r}, expected 15.5")
+    except ValueError:
+        _fail(f"kHz round-trip: MinFreqUS reloaded as non-numeric {reloaded!r}")
+    print("  ✓ kHz/Hz conversion: 15.5 kHz UI ↔ 15500 Hz on disk")
+
+
 def test_out_name_path_guard(tmpdir: Path) -> None:
     QSettings().setValue("has_opened_file", True)
     editor = _build_editor(tmpdir)
@@ -239,6 +285,7 @@ def main() -> int:
         test_per_profile_validation(tmp)
         test_master_slave_collision(tmp)
         test_live_clear_error(tmp)
+        test_khz_to_hz_conversion(tmp)
         test_out_name_path_guard(tmp)
     print("All smoke checks passed.")
     return 0
