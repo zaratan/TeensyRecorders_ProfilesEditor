@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QFormLayout, QTabWidget, QTabBar, QFrame, QToolTip, QApplication, QScrollArea, QSizePolicy, QDialog, QToolButton
 from PySide6.QtGui import QPixmap, QFont, QIntValidator, QDoubleValidator, QCursor
-from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths
+from PySide6.QtCore import Qt, QLocale, QTimer, QEvent, QStandardPaths, QSettings
 
 from .ini_utils import (
     detect_dropped_keys,
@@ -12,7 +12,7 @@ from .ini_utils import (
     parse_ini,
     save_with_template,
 )
-from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES
+from .config import FIELDS, SECTION_TITLES, PROFILE_LABELS, BUILD_VERSION, SUBTITLES, SCOPE_BADGES
 
 
 class HelperPopup(QFrame):
@@ -287,6 +287,26 @@ class ProfileEditor(QWidget):
         self.profile_combo.setCursor(Qt.PointingHandCursor)
         self.profile_combo.currentTextChanged.connect(self.change_profile)
         profile_layout.addWidget(self.profile_combo)
+        profile_layout.addSpacing(20)
+        # Device type — drives which scoped fields stay active. Persisted
+        # across sessions in QSettings so the user doesn't re-select on
+        # every launch.
+        profile_layout.addWidget(QLabel("Type d'appareil :"))
+        self.device_combo = QComboBox()
+        # userData carries the scope token used by _compute_enabled_map
+        # (matches SCOPE_BADGES keys for AR/PRS, plus the bare "PR" baseline).
+        self.device_combo.addItem("Passive Recorder (PR)", "PR")
+        self.device_combo.addItem("Active Recorder (AR)", "AR")
+        self.device_combo.addItem("Passive Stéréo (PRS)", "PRS")
+        self.device_combo.addItem("Passive Stéréo Synchro (PRS-S)", "PRS-S")
+        self.device_combo.setCursor(Qt.PointingHandCursor)
+        saved_device = QSettings().value("device_type", "PR")
+        idx = self.device_combo.findData(saved_device)
+        if idx >= 0:
+            self.device_combo.setCurrentIndex(idx)
+        self.device_combo.currentIndexChanged.connect(self._on_device_changed)
+        profile_layout.addWidget(self.device_combo)
+        profile_layout.addStretch(1)
         layout.addLayout(profile_layout)
 
         # Schema-drift banner slot: an empty layout that hosts the (re)built
@@ -321,6 +341,15 @@ class ProfileEditor(QWidget):
         save_layout = QHBoxLayout()
         save_btn = QPushButton("Sauvegarder")
         save_btn.setCursor(Qt.PointingHandCursor)
+        # Primary action style — distinguishes Save from the secondary
+        # "Choisir dossier sortie" button above it.
+        save_btn.setStyleSheet(
+            "QPushButton { background-color: #2b78ff; color: white; "
+            "padding: 8px 20px; font-weight: 600; border: none; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background-color: #1a5fd0; }"
+            "QPushButton:pressed { background-color: #144aa0; }"
+        )
         save_btn.clicked.connect(self.save_profile)
         save_layout.addWidget(save_btn)
 
@@ -516,11 +545,30 @@ class ProfileEditor(QWidget):
         form_layout.addRow(container)
         return container
 
+    @staticmethod
+    def _make_scope_badge(scope_key: str) -> QLabel | None:
+        """Coloured chip (AR / PRS / RL) shown next to fields scoped to a
+        specific hardware variant or operating mode. Returns None if the
+        key is unknown."""
+        info = SCOPE_BADGES.get(scope_key)
+        if info is None:
+            return None
+        badge = QLabel(info["label"])
+        badge.setStyleSheet(
+            f"QLabel {{ background-color: {info['color']}; color: white; "
+            f"border-radius: 3px; padding: 1px 5px; font-size: 9px; "
+            f"font-weight: bold; }}"
+        )
+        badge.setToolTip(info["tooltip"])
+        badge.setAlignment(Qt.AlignCenter)
+        return badge
+
     # Label avec helper
     def make_label_with_helper(self, key: str):
         meta = FIELDS.get(key, {})
         text = meta.get("tag", key)
         helper = meta.get("helper", "")
+        scope = meta.get("scope")
 
         container = QWidget()
         row = QHBoxLayout(container)
@@ -531,6 +579,13 @@ class ProfileEditor(QWidget):
 
         label = QLabel(text)
         row.addWidget(label)
+
+        # Scope badge sits right after the label, before the helper icon, so
+        # the chip reads as a noun-modifier on the field name itself.
+        if scope:
+            badge = self._make_scope_badge(scope)
+            if badge is not None:
+                row.addWidget(badge)
 
         if helper:
             info = HelperLabel(helper)
@@ -678,6 +733,11 @@ class ProfileEditor(QWidget):
         # Slot wrapper that ignores the index arg from currentIndexChanged.
         self.apply_conditional_visibility()
 
+    def _on_device_changed(self, _index: int) -> None:
+        # Persist the device-type choice and refresh greying.
+        QSettings().setValue("device_type", self.device_combo.currentData())
+        self.apply_conditional_visibility()
+
     def _current_value(self, key: str) -> str:
         """Read the current value of a field — widget first (truth in UI),
         then cache, then disk, then FIELDS default."""
@@ -699,12 +759,28 @@ class ProfileEditor(QWidget):
 
     def _compute_enabled_map(self) -> dict[str, bool]:
         """Decide which fields are active given the current OpMode /
-        SampFreqU / ThresholdType. Fields not mentioned default to enabled.
+        SampFreqU / ThresholdType / device type. Fields not mentioned default
+        to enabled.
         """
         enabled: dict[str, bool] = {k: True for k in FIELDS}
         op_mode = self._current_value("OpMode")
         samp_us = self._current_value("SampFreqU")
         threshold_type = self._current_value("ThresholdType")
+        device_type = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
+
+        # --- Hardware-scoped fields. Grey out anything that doesn't apply to
+        # the selected device variant. PRS-scoped fields (Stereo/Top/LED/
+        # MasterSlave) are active for both PRS and PRS-S; AR-scoped fields
+        # (Heterodyne …) only for AR. RhinoLogger scope is a mode flag, not a
+        # hardware flag — left untouched here.
+        ar_active = (device_type == "AR")
+        prs_active = (device_type in ("PRS", "PRS-S"))
+        for k, meta in FIELDS.items():
+            scope = meta.get("scope")
+            if scope == "AR" and not ar_active:
+                enabled[k] = False
+            elif scope == "PRS" and not prs_active:
+                enabled[k] = False
 
         # --- OpMode-driven rules
         if op_mode != "Timed recording":
@@ -762,11 +838,42 @@ class ProfileEditor(QWidget):
 
         return enabled
 
+    def _refresh_opmode_combo_items(self) -> None:
+        """Disable OpMode entries that the firmware would refuse for the
+        current device. Mirrors CModeGeneric.cpp:873 (PHETER / AUDIOREC are
+        AR-only) and CModeParams.cpp:1071+ (SYNCHRO is PRS-S-only). If the
+        currently-selected mode becomes invalid, fall back to 'Auto record'.
+        """
+        device = self.device_combo.currentData() if hasattr(self, "device_combo") else "PR"
+        opmode = self.inputs.get("OpMode")
+        if not isinstance(opmode, QComboBox):
+            return
+        rules = {
+            "Heterodyne": device == "AR",
+            "Audio Rec.": device == "AR",
+            "Synchro": device == "PRS-S",
+        }
+        model = opmode.model()
+        for i in range(opmode.count()):
+            choice_val = opmode.itemData(i)
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(rules.get(choice_val, True))
+        # If the currently-selected mode just became invalid, switch to
+        # Auto record (the firmware would coerce to the same default).
+        current_item = model.item(opmode.currentIndex())
+        if current_item is not None and not current_item.isEnabled():
+            fallback = opmode.findData("Auto record")
+            if fallback >= 0:
+                opmode.setCurrentIndex(fallback)
+
     def apply_conditional_visibility(self) -> None:
         """Grey out fields that don't apply to the current OpMode / SampFreq /
-        ThresholdType / Vigie-Chiro protocol. Greyed widgets keep their value
-        (no reset on toggle). Subtitle headers grey out when all the fields
-        below them are inactive."""
+        ThresholdType / Vigie-Chiro protocol / device type. Greyed widgets
+        keep their value (no reset on toggle). Subtitle headers grey out
+        when all the fields below them are inactive. OpMode combo items
+        invalid for the current device are also disabled."""
+        self._refresh_opmode_combo_items()
         enabled = self._compute_enabled_map()
         for key, widget in self.inputs.items():
             is_on = enabled.get(key, True)
@@ -1003,6 +1110,11 @@ class ProfileEditor(QWidget):
             tab_idx = self.field_tab_index.get(first_key)
             if tab_idx is not None:
                 self.tabs.setCurrentIndex(tab_idx)
+            # Focus the first faulty widget so the user can start typing
+            # the correction immediately.
+            first_widget = self.inputs.get(first_key)
+            if first_widget is not None:
+                first_widget.setFocus()
             lines = [
                 f"  • {FIELDS.get(k, {}).get('tag', k)} : {msg}"
                 for k, msg in errors

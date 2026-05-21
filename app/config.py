@@ -11,6 +11,29 @@ except ImportError:
         BUILD_VERSION = "0.0.0+unknown"
 
 
+# Scope badges shown next to fields specific to a hardware variant or a
+# particular operating mode. Rendered as 16-px coloured chips by
+# ui_editor.make_label_with_helper. Each field in FIELDS may carry an
+# optional "scope" key (one of these tokens) — if absent, no badge.
+SCOPE_BADGES = {
+    "AR": {
+        "color": "#1d8a8a",  # teal
+        "label": "AR",
+        "tooltip": "Champ utilisé uniquement par l'Active Recorder",
+    },
+    "PRS": {
+        "color": "#c08019",  # amber
+        "label": "PRS",
+        "tooltip": "Champ utilisé uniquement par le Passive Recorder Stéréo (PRS / PRS-S)",
+    },
+    "RhinoLogger": {
+        "color": "#7b3aa8",  # purple
+        "label": "RL",
+        "tooltip": "Champ utilisé uniquement en mode RhinoLogger",
+    },
+}
+
+
 # FIELDS schema reference: firmware CModeGeneric.cpp ImportProfiles (~line 2349)
 # and ExportProfiles (~line 1922). Every combo's "choices" must match the
 # firmware enum strings verbatim; the "choice_labels" override (optional)
@@ -43,7 +66,7 @@ FIELDS = {
                   "• <b>Timed recording</b> : enregistrement périodique cadencé.<br>"
                   "• <b>Heterodyne</b> / <b>Audio Rec.</b> : réservés à l'Active Recorder.<br>"
                   "• <b>Synchro</b> : cluster PRS-S synchronisé LoRa."},
-    "MasterSlave": {"type": "int", "min": 0, "max": 9, "step": 1, "default": 0, "tag": "Maître/Esclave",
+    "MasterSlave": {"type": "int", "min": 0, "max": 9, "step": 1, "default": 0, "tag": "Maître/Esclave", "scope": "PRS",
         "helper": "<b>PRS-S uniquement, mode Synchro.</b> Rôle dans un cluster synchronisé LoRa. <b>0</b> = Maître ; <b>1 à 9</b> = Esclave numéroté. Un seul Maître par cluster ; les Esclaves doivent avoir des numéros uniques."},
 
     # ---- Horaires ----
@@ -104,46 +127,46 @@ FIELDS = {
         "helper": "Filtre passe-haut numérique, en kHz avec précision <b>0,1 kHz</b>. Coupe le bruit basse fréquence avec pas fin. Utilisé quand SampFreq < 192 kHz (mode audio)."},
     "Exp10": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "1", "tag": "Expansion de temps ×10",
         "helper": "Active l'expansion de temps ×10. <b>Modifie uniquement l'en-tête WAV</b> pour annoncer une fréquence 10× plus basse — le signal n'est <b>pas réellement</b> ralenti. Au playback dans VLC/Windows Media, le fichier se lit 10× plus lentement, donc audible à l'oreille humaine.<br><br>Kaleidoscope, Tadarida, BatExplorer détectent l'astuce automatiquement. Un script qui lit l'en-tête brut verra « 38,4 kHz » au lieu de 384 kHz. <b>Défaut : Oui.</b>"},
-    "StereoMode": {"type": "combo", "choices": ["Stereo","MonoRight","MonoLeft"], "choice_labels": ["Stéréo", "Mono droit", "Mono gauche"], "default": "Stereo", "tag": "Canal d'enregistrement",
+    "StereoMode": {"type": "combo", "choices": ["Stereo","MonoRight","MonoLeft"], "choice_labels": ["Stéréo", "Mono droit", "Mono gauche"], "default": "Stereo", "tag": "Canal d'enregistrement", "scope": "PRS",
         "helper": "<b>PRS uniquement.</b> Sur Passive Recorder Stéréo (2 micros), choisit le mode d'enregistrement. En <b>Stéréo</b>, le suffixe du fichier indique quel canal a déclenché : <code>_0_</code> = micro gauche, <code>_1_</code> = micro droit."},
     "MicrophoneType": {"type": "combo", "choices": ["SPU0410","ICS43730","FG23329"], "default": "ICS43730", "tag": "Modèle de microphone",
         "helper": "Modèle de microphone installé. Le défaut <b>ICS43730</b> couvre la plupart des cas chiroptéro. <b>SPU0410</b> et <b>FG23329</b> selon le matériel monté."},
-    "TopAudioFreq": {"type": "int", "min": 1, "max": 50, "step": 1, "default": 2, "tag": "Fréquence top synchro (kHz)",
+    "TopAudioFreq": {"type": "int", "min": 1, "max": 50, "step": 1, "default": 2, "tag": "Fréquence top synchro (kHz)", "scope": "PRS",
         "helper": "<b>PRS-S Maître uniquement.</b> Fréquence du « top synchro » émis par le Maître aux Esclaves, enregistré dans chaque WAV pour permettre la synchronisation temporelle en post-traitement. <b>Défaut : 2 kHz.</b>"},
-    "TopDuration": {"type": "combo", "choices": ["256","512","1024"], "choice_labels": ["256 éch.","512 éch.","1024 éch."], "default": "256", "tag": "Durée du top",
+    "TopDuration": {"type": "combo", "choices": ["256","512","1024"], "choice_labels": ["256 éch.","512 éch.","1024 éch."], "default": "256", "tag": "Durée du top", "scope": "PRS",
         "helper": "<b>PRS-S Maître uniquement.</b> Durée du top audio en nombre d'échantillons. 256, 512 ou 1024."},
-    "TopPeriod": {"type": "int", "min": 0, "max": 10, "step": 1, "default": 0, "tag": "Période du top",
+    "TopPeriod": {"type": "int", "min": 0, "max": 10, "step": 1, "default": 0, "tag": "Période du top", "scope": "PRS",
         "helper": "<b>PRS-S Maître uniquement.</b> <b>0</b> = top envoyé une seule fois au début de l'enregistrement. <b>≥ 1</b> = tops émis périodiquement pendant l'enregistrement."},
 
     # ---- Hétérodyne ----
-    "HeterodyneMode": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Manuel", "Auto"], "default": "0", "tag": "Mode hétérodyne",
+    "HeterodyneMode": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Manuel", "Auto"], "default": "0", "tag": "Mode hétérodyne", "scope": "AR",
         "helper": "<b>Active Recorder uniquement.</b><br><br><b>Manuel</b> : c'est vous qui tournez la molette pour chercher la fréquence d'une espèce. <b>Auto</b> : l'appareil cale automatiquement la fréquence sur le pic d'énergie détecté ; la molette permet de jouer à ±10 kHz autour."},
-    "AutoRecHeter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Auto-enregistrement hétérodyne",
+    "AutoRecHeter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Auto-enregistrement hétérodyne", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Déclenche automatiquement un enregistrement WAV depuis le mode hétérodyne quand un signal est détecté."},
-    "RefreshGraphe": {"type": "float", "min": 0.2, "max": 2.0, "step": 0.2, "default": 1.0, "tag": "Rafraîchissement graphique (s)",
+    "RefreshGraphe": {"type": "float", "min": 0.2, "max": 2.0, "step": 0.2, "default": 1.0, "tag": "Rafraîchissement graphique (s)", "scope": "AR",
         "helper": "<b>AR uniquement.</b> Vitesse de défilement du graphe d'activité fréquentielle, en secondes. 0,2 à 2,0. Cosmétique, à ajuster au confort."},
-    "HeterLevel": {"type": "float", "min": 0.1, "max": 0.9, "step": 0.1, "default": 0.1, "tag": "Seuil hétérodyne",
+    "HeterLevel": {"type": "float", "min": 0.1, "max": 0.9, "step": 0.1, "default": 0.1, "tag": "Seuil hétérodyne", "scope": "AR",
         "helper": "<b>AR uniquement.</b> Niveau audio de sortie hétérodyne. 0,1 à 0,9. À ajuster au confort selon le bruit ambiant."},
-    "Pre-TriggerAuto": {"type": "int", "min": 0, "max": 10, "default": 1, "tag": "Pré-trigger auto (s)",
+    "Pre-TriggerAuto": {"type": "int", "min": 0, "max": 10, "default": 1, "tag": "Pré-trigger auto (s)", "scope": "AR",
         "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée de signal pré-enregistrée avant le déclenchement automatique, en secondes. Évite que le 1er cri du fichier soit tronqué (le temps que l'algorithme de détection se déclenche). <b>Défaut : 1 s.</b> 3 s largement suffisant, monter à 5 s en site très actif."},
-    "Pre-TriggerHeter": {"type": "int", "min": 0, "max": 10, "default": 3, "tag": "Pré-trigger hétérodyne (s)",
+    "Pre-TriggerHeter": {"type": "int", "min": 0, "max": 10, "default": 3, "tag": "Pré-trigger hétérodyne (s)", "scope": "AR",
         "helper": "<b>Teensy 4.1 avec mémoire étendue uniquement.</b> Durée pré-enregistrée avant le déclenchement manuel en mode hétérodyne, en secondes. <b>Défaut : 3 s.</b>"},
     # Firmware writes "HeterSelectiveFilter" but reads "Pre-HeterSelectiveFilter"
     # (firmware bug in CModeGeneric.cpp line 2464). We align on the read-side name
     # so the value actually round-trips through the device.
-    "Pre-HeterSelectiveFilter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Filtre sélectif hétérodyne",
+    "Pre-HeterSelectiveFilter": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Filtre sélectif hétérodyne", "scope": "AR",
         "helper": "<b>AR, Teensy 4.1 uniquement.</b> Active un filtrage sélectif du signal hétérodyne pour améliorer la lisibilité dans un environnement bruyant. À tester sur le terrain."},
-    "HeterAutoPlay": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Lecture automatique",
+    "HeterAutoPlay": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Lecture automatique", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Après chaque enregistrement déclenché, rejoue automatiquement la séquence en X10 sur le casque. Pratique en prospection active pour valider à l'oreille."},
-    "HeterWithGraph": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "1", "tag": "Affichage graphique",
+    "HeterWithGraph": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "1", "tag": "Affichage graphique", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Affiche le graphe d'activité fréquentielle sous la barre d'échelle. <b>Non</b> = remplacé par la liste des 3 derniers fichiers WAV."},
-    "HeterAGC": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "AGC hétérodyne",
+    "HeterAGC": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "AGC hétérodyne", "scope": "AR",
         "helper": "<b>AR uniquement, mode Hétérodyne.</b> Contrôle Automatique de Gain — atténue le bruit de sortie casque en présence de signaux faibles, améliore le confort d'écoute.<br><br>Inconvénients : moins sensible aux signaux faibles, cris faibles/moyens un peu moins définis, effet de pompage possible en alternance signaux forts/faibles."},
 
     # ---- Fichiers ----
     "WavPrefix": {"type": "text", "limit": 5, "tag": "Préfixe fichier",
         "helper": "Préfixe des noms de fichiers WAV (<b>5 caractères max</b>). Complété ensuite par le firmware avec n° de série, date, heure. <b>Défaut : PaRec.</b><br><br>Astuce multi-sites : coder le site dans le préfixe (<code>SITE1</code>, <code>GROT2</code>) pour identifier la provenance sans ouvrir les métadonnées."},
-    "LEDSynchro": {"type": "combo", "choices": ["NO","REC","3 REC"], "choice_labels": ["Aucune", "À chaque enregistrement", "3 premiers enregistrements"], "default": "REC", "tag": "Affichage LED",
+    "LEDSynchro": {"type": "combo", "choices": ["NO","REC","3 REC"], "choice_labels": ["Aucune", "À chaque enregistrement", "3 premiers enregistrements"], "default": "REC", "tag": "Affichage LED", "scope": "PRS",
         "helper": "<b>PRS-S Maître uniquement.</b> Allume ou non la LED du Teensy à chaque enregistrement pour vérifier visuellement la synchronisation. <b>3 premiers</b> = test discret (uniquement les 3 premiers enregistrements)."},
     "BatcorderMode": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Nommage Batcorder",
         "helper": "Change le nommage des fichiers pour ressembler à celui du <b>Batcorder ecoObs</b> (<code>DDMMYY-HHMMSS-NAMENUMBER-00001.wav</code>) et crée un <code>LOGFILE.txt</code> mémorisant la température. Utile si vous avez déjà un pipeline d'analyse Batcorder (BCAdmin, BCAnalyze). <b>Défaut : Non.</b>"},
@@ -197,7 +220,7 @@ FIELDS = {
         "helper": "Sauve le bruit moyen mesuré par bande dans un fichier CSV séparé. Utile pour <b>caractériser la qualité acoustique d'un site</b> avant pose réelle. <b>Défaut : Non.</b>"},
 
     # ---- RhinoLogger ----
-    "AffRLPerm": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Affichage RhinoLogger permanent",
+    "AffRLPerm": {"type": "combo", "choices": ["0","1"], "choice_labels": ["Non", "Oui"], "default": "0", "tag": "Affichage RhinoLogger permanent", "scope": "RhinoLogger",
         "helper": "<b>Mode RhinoLogger uniquement.</b> Garde l'affichage des compteurs d'activité en permanence à l'écran. <b>Oui</b> = utile pour la mise au point sur site (vérifier visuellement que ça déclenche bien). <b>Non (défaut)</b> = recommandé en pose longue durée (discrétion, économie OLED)."},
 
     # ---- Alimentation (Power bank keep-alive) ----

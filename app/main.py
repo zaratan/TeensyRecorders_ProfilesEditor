@@ -8,6 +8,11 @@ from .ini_utils import resource_path
 
 def run():
     app = QApplication(sys.argv)
+    # Organization + application name are required for QSettings to land
+    # in the canonical platform location (e.g. ~/Library/Preferences on
+    # macOS) — used to persist the user's device-type preference.
+    app.setOrganizationName("TeensyRecorders")
+    app.setApplicationName("ProfilesEditor")
 
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     # Wake the Qt loop periodically so Python can handle SIGINT
